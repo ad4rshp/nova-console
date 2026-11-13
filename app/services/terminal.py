@@ -214,15 +214,39 @@ def scrub_sensitive_output(text: str) -> str:
 def run_system_command(
     command: str,
     working_dir: str | None = None,
-    approval_token: str | None = None
+    approval_token: str | None = None,
+    user_authorization: str | None = None
 ) -> dict[str, Any]:
     """
     Executes a system command with strict server-side authorization and process isolation.
+    Requires BOTH:
+    1. Valid server-side user authorization credential.
+    2. Cryptographic single-use command approval token.
     """
     target_dir = validate_working_dir(working_dir)
     cmd_clean = command.strip()
 
-    # 1. Enforce Server-Side Token Authorization
+    if os.environ.get("NOVA_DISABLE_TERMINAL", "0").lower() in ("1", "true", "yes"):
+        return {
+            "ok": False,
+            "error": "Terminal command execution is disabled by server security policy (NOVA_DISABLE_TERMINAL).",
+            "return_code": 403,
+            "output": "",
+            "working_dir": str(target_dir)
+        }
+
+    # 1. Enforce Server-Side User Authorization
+    from app.services.auth import verify_admin_token
+    if not verify_admin_token(user_authorization):
+        return {
+            "ok": False,
+            "error": "Execution declined: valid server-side user authorization credential required.",
+            "return_code": 401,
+            "output": "",
+            "working_dir": str(target_dir)
+        }
+
+    # 2. Enforce Server-Side Single-Use Token Authorization
     valid, reason, token_data = verify_and_consume_token(approval_token or "", cmd_clean, str(target_dir))
     if not valid:
         return {

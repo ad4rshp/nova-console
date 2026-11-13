@@ -21,6 +21,13 @@ from app.config import (
     PORT,
     HOST,
     NOVA_ALLOW_LAN,
+    is_loopback_host,
+)
+from app.services.auth import (
+    get_or_create_admin_token,
+    verify_admin_token,
+    extract_token_from_request,
+    is_request_authenticated,
 )
 from app.database import (
     init_db,
@@ -72,16 +79,36 @@ def get_allowed_origins() -> list[str]:
                 origins.append(c.strip())
     return origins
 
+SENSITIVE_API_PREFIXES = (
+    "/api/terminal/",
+    "/api/modelfile",
+    "/api/rebuild-nova",
+    "/api/settings",
+    "/api/clear-chat-history",
+    "/api/unload",
+)
+
 class SecurityHeadersMiddleware(BaseHTTPMiddleware):
     async def dispatch(self, request: Request, call_next):
-        # Origin & CSRF Protection on state-changing API endpoints
+        # 1. Authentication enforcement on sensitive routes when LAN mode is active or auth explicitly required
+        is_sensitive = any(request.url.path.startswith(prefix) for prefix in SENSITIVE_API_PREFIXES)
+        require_auth = NOVA_ALLOW_LAN or os.environ.get("NOVA_REQUIRE_AUTH", "0") in ("1", "true", "yes")
+
+        if is_sensitive and require_auth:
+            if not is_request_authenticated(request):
+                return JSONResponse(
+                    status_code=401,
+                    content={"error": "Authentication required: LAN mode is active or sensitive administrative route accessed. Provide a valid Authorization Bearer or X-Nova-Auth token."}
+                )
+
+        # 2. Origin & CSRF Protection on state-changing API endpoints
         if request.method in ("POST", "PUT", "DELETE", "PATCH") and request.url.path.startswith("/api/"):
             origin = request.headers.get("origin") or request.headers.get("referer")
             if origin:
                 parsed = urlparse(origin)
                 origin_host = parsed.hostname or ""
                 # Reject external/cross-origin requests attempting to manipulate local state
-                if origin_host not in ("127.0.0.1", "localhost", "::1") and not NOVA_ALLOW_LAN:
+                if origin_host not in ("127.0.0.1", "localhost", "::1", "testserver") and not NOVA_ALLOW_LAN:
                     return JSONResponse(
                         status_code=403,
                         content={"error": "Cross-Origin / CSRF security rejection: unauthorized request origin."}
@@ -151,11 +178,12 @@ class ExecuteCommandPayload(BaseModel):
     command: str = Field(..., max_length=4096)
     working_dir: str | None = None
     approval_token: str = Field(..., min_length=16, max_length=128)
+    user_authorization: str | None = None
     approved: bool | None = None
 
 # --- Frontend HTML Delivery ---
 @app.get("/", response_class=HTMLResponse)
-async def serve_dashboard():
+async def serve_dashboard(request: Request):
     candidates = [
         BASE_DIR / "app" / "templates" / "dashboard.html",
         STATIC_DIR / "app" / "templates" / "dashboard.html",
@@ -165,13 +193,25 @@ async def serve_dashboard():
     ]
     for candidate in candidates:
         if candidate.exists():
-            return HTMLResponse(content=candidate.read_text(encoding="utf-8"))
+            html = candidate.read_text(encoding="utf-8")
+            # For loopback sessions, inject the local session auth token into window context
+            client_ip = request.client.host if request.client else ""
+            if is_loopback_host(client_ip) or not client_ip:
+                admin_token = get_or_create_admin_token()
+                session_inject = f'<script id="nova-auth-script">window.__NOVA_AUTH_TOKEN__ = "{admin_token}";</script>\n</head>'
+                html = html.replace("</head>", session_inject, 1)
+            return HTMLResponse(content=html)
     raise HTTPException(status_code=404, detail="dashboard.html not found")
 
 # --- Core Dashboard API ---
 @app.get("/api/dashboard")
-async def get_dashboard():
-    return await get_dashboard_state()
+async def get_dashboard(request: Request):
+    state = await get_dashboard_state()
+    state["auth"] = {
+        "lan_mode": NOVA_ALLOW_LAN,
+        "is_authenticated": is_request_authenticated(request)
+    }
+    return state
 
 @app.get("/api/check-update")
 async def check_update_endpoint(force: bool = False):
@@ -226,20 +266,31 @@ async def propose_terminal_command(payload: ProposeCommandPayload):
     return token_data
 
 @app.post("/api/terminal/execute")
-async def execute_terminal_command(payload: ExecuteCommandPayload):
+async def execute_terminal_command(payload: ExecuteCommandPayload, request: Request):
     if not payload.approval_token:
         return JSONResponse(
             status_code=403,
             content={"ok": False, "error": "Execution declined: cryptographic server approval token required."}
         )
 
+    # Extract and verify server-side user authorization
+    user_auth = payload.user_authorization or extract_token_from_request(request)
+    if not verify_admin_token(user_auth):
+        return JSONResponse(
+            status_code=401,
+            content={"ok": False, "error": "Execution declined: valid server-side user authorization credential required."}
+        )
+
     result = run_system_command(
         payload.command,
         working_dir=payload.working_dir,
-        approval_token=payload.approval_token
+        approval_token=payload.approval_token,
+        user_authorization=user_auth
     )
-    if not result.get("ok") and result.get("return_code") == 403:
-        return JSONResponse(status_code=403, content=result)
+    if not result.get("ok"):
+        code = result.get("return_code", 403)
+        status_code = code if code in (401, 403) else 400
+        return JSONResponse(status_code=status_code, content=result)
     return result
 
 # --- Streaming Chat with Local Engine ---

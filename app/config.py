@@ -1,3 +1,4 @@
+import ipaddress
 import os
 import sys
 from pathlib import Path
@@ -17,20 +18,60 @@ if not MODELFILE_PATH.exists() and (BASE_DIR / "Modelfile").exists():
     MODELFILE_PATH = BASE_DIR / "Modelfile"
 TEMPLATES_DIR = (BUNDLE_DIR if getattr(sys, "frozen", False) and hasattr(sys, "_MEIPASS") else BASE_DIR) / "app" / "templates"
 
-# Network & Service Configuration
-# Security Rule: Default to 127.0.0.1 (Localhost Only).
-# LAN exposure requires explicit opt-in via NOVA_ALLOW_LAN=1.
-NOVA_ALLOW_LAN = os.environ.get("NOVA_ALLOW_LAN", "0").lower() in ("1", "true", "yes")
+# Network & Host Binding Validation
+# Security Rule: Default strictly to 127.0.0.1 (Localhost Only).
+# Any non-loopback bind address (0.0.0.0, LAN IP, public IP) MANDATES NOVA_ALLOW_LAN=1.
 
+def is_loopback_host(host_str: str) -> bool:
+    """
+    Determines whether a host string is a strict loopback address.
+    Returns True for localhost, 127.0.0.1, ::1, or testserver.
+    Returns False for 0.0.0.0, ::, LAN interfaces, or public domains.
+    """
+    if not host_str:
+        return False
+    host_clean = host_str.strip().lower().strip("[]")
+    if host_clean in ("localhost", "127.0.0.1", "::1", "testserver"):
+        return True
+    try:
+        ip = ipaddress.ip_address(host_clean)
+        return ip.is_loopback
+    except ValueError:
+        # Non-IP hostnames (e.g. 0.0.0.0, custom domain) are not loopback
+        return False
+
+def validate_bind_host(raw_host: str, allow_lan: bool) -> str:
+    """
+    Validates the bind host against security policies.
+    Requires NOVA_ALLOW_LAN=1 for any non-loopback host address.
+    """
+    cleaned = raw_host.strip() if raw_host else ""
+    if not cleaned:
+        return "0.0.0.0" if allow_lan else "127.0.0.1"
+
+    if is_loopback_host(cleaned):
+        return cleaned
+
+    # Non-loopback address requested
+    if not allow_lan:
+        raise ValueError(
+            f"Security Violation: Binding to non-loopback address '{cleaned}' requires NOVA_ALLOW_LAN=1. "
+            f"Set NOVA_ALLOW_LAN=1 to explicitly authorize network exposure."
+        )
+    return cleaned
+
+NOVA_ALLOW_LAN = os.environ.get("NOVA_ALLOW_LAN", "0").lower() in ("1", "true", "yes")
 _env_host = os.environ.get("NOVA_HOST", "").strip()
-if _env_host:
-    if _env_host in ("0.0.0.0", "::") and not NOVA_ALLOW_LAN:
-        # Prevent accidental LAN exposure unless explicitly permitted
+
+try:
+    HOST = validate_bind_host(_env_host, NOVA_ALLOW_LAN)
+except ValueError as e:
+    # If invalid host provided in environment without NOVA_ALLOW_LAN, raise to stop execution
+    # or fallback to loopback if running in safe mode
+    if os.environ.get("NOVA_SAFE_FALLBACK", "0") == "1":
         HOST = "127.0.0.1"
     else:
-        HOST = _env_host
-else:
-    HOST = "0.0.0.0" if NOVA_ALLOW_LAN else "127.0.0.1"
+        raise
 
 try:
     PORT = int(os.environ.get("NOVA_PORT", os.environ.get("PORT", 8080)))

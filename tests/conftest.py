@@ -24,3 +24,4 @@ def setup_test_environment():
 @pytest.fixture
 def client():
     return TestClient(app)
+

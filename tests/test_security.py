@@ -101,3 +101,151 @@ def test_csrf_origin_rejection(client):
     )
     assert res.status_code == 403
     assert "CSRF" in res.json().get("error", "")
+
+def test_api_command_token_replay_rejected(client):
+    """API level test: Replay attack with an already-consumed approval token must be rejected."""
+    from app.services.auth import get_or_create_admin_token
+    admin_token = get_or_create_admin_token()
+
+    # 1. Propose command
+    propose_res = client.post("/api/terminal/propose", json={"command": "echo replay_test"})
+    assert propose_res.status_code == 200
+    token = propose_res.json()["approval_token"]
+
+    # 2. First execution succeeds
+    exec_res = client.post("/api/terminal/execute", json={
+        "command": "echo replay_test",
+        "approval_token": token,
+        "user_authorization": admin_token,
+        "approved": True
+    })
+    assert exec_res.status_code == 200
+    assert exec_res.json()["ok"] is True
+
+    # 3. Second execution with identical token MUST fail
+    replay_res = client.post("/api/terminal/execute", json={
+        "command": "echo replay_test",
+        "approval_token": token,
+        "user_authorization": admin_token,
+        "approved": True
+    })
+    assert replay_res.status_code == 403
+    assert "replay" in replay_res.json()["error"].lower() or "invalid" in replay_res.json()["error"].lower()
+
+def test_api_command_tampering_rejected(client):
+    """API level test: Modifying command or working directory after token issuance must be rejected."""
+    from app.services.auth import get_or_create_admin_token
+    admin_token = get_or_create_admin_token()
+
+    propose_res = client.post("/api/terminal/propose", json={"command": "echo original"})
+    token = propose_res.json()["approval_token"]
+
+    # Tampering: submit different command with original token
+    tampered_res = client.post("/api/terminal/execute", json={
+        "command": "echo modified_attack",
+        "approval_token": token,
+        "user_authorization": admin_token,
+        "approved": True
+    })
+    assert tampered_res.status_code == 403
+    assert "tampering" in tampered_res.json()["error"].lower()
+
+def test_path_traversal_confinement_deep():
+    """Ensure various path traversal attempts are strictly confined to WORKSPACE_DIR."""
+    base = WORKSPACE_DIR.resolve()
+    traversal_payloads = [
+        "../../",
+        "..\\..\\",
+        "../../../../Windows/System32",
+        "../../../../etc/passwd",
+        "/etc/shadow",
+        "C:\\Windows\\System32",
+        "~",
+        "./../../",
+    ]
+    for payload in traversal_payloads:
+        resolved = validate_working_dir(payload)
+        assert resolved == base or resolved.is_relative_to(base), f"Traversal escaped on payload: {payload}"
+
+def test_host_binding_bypasses():
+    """Ensure all non-loopback bind hosts require NOVA_ALLOW_LAN=1, preventing bypasses."""
+    from app.config import validate_bind_host, is_loopback_host
+
+    # Non-loopback addresses that MUST raise ValueError when allow_lan=False
+    blocked_hosts = [
+        "0.0.0.0",
+        "::",
+        "[::]",
+        "192.168.1.100",
+        "10.0.0.1",
+        "172.16.0.5",
+        "8.8.8.8",
+        "attacker.local",
+        "malicious.domain.com"
+    ]
+    for host in blocked_hosts:
+        with pytest.raises(ValueError) as excinfo:
+            validate_bind_host(host, allow_lan=False)
+        assert "requires NOVA_ALLOW_LAN=1" in str(excinfo.value), f"Host bypass allowed: {host}"
+
+    # When allow_lan=True, binding is permitted
+    assert validate_bind_host("0.0.0.0", allow_lan=True) == "0.0.0.0"
+    assert validate_bind_host("192.168.1.50", allow_lan=True) == "192.168.1.50"
+
+    # Loopback hosts must succeed even when allow_lan=False
+    assert is_loopback_host("127.0.0.1") is True
+    assert is_loopback_host("localhost") is True
+    assert is_loopback_host("::1") is True
+    assert validate_bind_host("127.0.0.1", allow_lan=False) == "127.0.0.1"
+    assert validate_bind_host("localhost", allow_lan=False) == "localhost"
+
+def test_cross_platform_command_execution():
+    """Ensure safe commands execute cross-platform, secrets are scrubbed, and unauth calls are rejected."""
+    from app.services.auth import get_or_create_admin_token
+    admin_token = get_or_create_admin_token()
+
+    # 1. Unauthenticated execution fails with 401
+    token_data = generate_approval_token("echo auth_test")
+    unauth_result = run_system_command("echo auth_test", approval_token=token_data["approval_token"], user_authorization="invalid_token")
+    assert unauth_result["ok"] is False
+    assert unauth_result["return_code"] == 401
+
+    # 2. Authenticated execution succeeds
+    token_data2 = generate_approval_token("echo cross_platform_test")
+    auth_result = run_system_command("echo cross_platform_test", approval_token=token_data2["approval_token"], user_authorization=admin_token)
+    assert auth_result["ok"] is True
+    assert auth_result["return_code"] == 0
+    assert "cross_platform_test" in auth_result["output"]
+
+    # 3. Secret scrubbing in output
+    token_data3 = generate_approval_token("echo Bearer sk-supersecretkey1234567890")
+    scrub_result = run_system_command("echo Bearer sk-supersecretkey1234567890", approval_token=token_data3["approval_token"], user_authorization=admin_token)
+    assert scrub_result["ok"] is True
+    assert "[REDACTED]" in scrub_result["output"]
+    assert "sk-supersecretkey1234567890" not in scrub_result["output"]
+
+def test_lan_mode_sensitive_routes_require_authentication(client, monkeypatch):
+    """Ensure that when LAN mode is active (NOVA_ALLOW_LAN=True), all sensitive routes require auth."""
+    from app.services.auth import get_or_create_admin_token
+    admin_token = get_or_create_admin_token()
+
+    monkeypatch.setattr("app.main.NOVA_ALLOW_LAN", True)
+
+    sensitive_endpoints = [
+        ("POST", "/api/terminal/propose", {"command": "echo test"}),
+        ("POST", "/api/settings", {"theme": "dark"}),
+        ("POST", "/api/clear-chat-history", {}),
+        ("POST", "/api/unload", {"model": "nova:latest"}),
+    ]
+
+    for method, path, payload in sensitive_endpoints:
+        # Without auth: must return 401 Unauthorized
+        res_no_auth = client.request(method, path, json=payload)
+        assert res_no_auth.status_code == 401, f"Expected 401 for {path} without auth in LAN mode, got {res_no_auth.status_code}"
+        assert "Authentication required" in res_no_auth.json().get("error", "")
+
+        # With valid X-Nova-Auth header: should NOT return 401
+        res_with_auth = client.request(method, path, json=payload, headers={"X-Nova-Auth": admin_token})
+        assert res_with_auth.status_code != 401, f"Expected non-401 for {path} with valid auth header"
+
+

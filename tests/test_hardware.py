@@ -36,3 +36,4 @@ def test_storage_stats_caching():
     # Second call should be instant (from cache)
     assert d2 < 0.05
     assert s1["model_dir_gb"] == s2["model_dir_gb"]
+

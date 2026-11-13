@@ -48,10 +48,20 @@
     });
   }
 
+  function getAuthToken() {
+    return window.__NOVA_AUTH_TOKEN__ || localStorage.getItem("nova_auth_token") || "";
+  }
+
   async function postJson(url, payload) {
+    const headers = { 'Content-Type': 'application/json' };
+    const token = getAuthToken();
+    if (token) {
+      headers['X-Nova-Auth'] = token;
+      headers['Authorization'] = `Bearer ${token}`;
+    }
     const res = await fetch(url, {
       method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
+      headers,
       body: JSON.stringify(payload)
     });
     return res.json();
@@ -1361,7 +1371,12 @@
     renderChatMessages();
 
     try {
-      const res = await postJson('/api/terminal/execute', { command: cmd, approval_token: token, approved: true });
+      const res = await postJson('/api/terminal/execute', { 
+        command: cmd, 
+        approval_token: token, 
+        user_authorization: getAuthToken(),
+        approved: true 
+      });
       if (res.error) {
         chatHistory[assistantIndex] = {
           role: 'assistant',

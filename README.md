@@ -40,14 +40,14 @@ python launch.py
 
 ---
 
-## 🛡️ Trust & Privacy Guarantee
+## 🛡️ Trust & Security Hardening
 
-* **Strict Localhost (`127.0.0.1`)**: Binds strictly to local loopback by default. Remote/LAN access is rejected unless explicitly enabled via `NOVA_ALLOW_LAN=1`.
-* **Zero Telemetry**: No analytics, no tracking pixels, no user fingerprinting, and no account required.
-* **100% Offline Core**: Local model inference and hardware monitoring are 100% offline. An optional passive GitHub version check runs on dashboard startup (toggleable via `NOVA_CHECK_UPDATES=0`).
-* **Cryptographic Terminal Execution**: Command execution requires a server-side single-use cryptographic approval token (60s TTL), path confinement strictly within the workspace directory, and automatic blocking of catastrophic system commands.
-* **Zero Background RAM**: When closed, it exits completely. No background daemons or hidden miners.
-* **Security Headers & CSRF Defense**: Enforces strict origin checking on state-changing API endpoints and standard defensive security headers (`nosniff`, `SAMEORIGIN`).
+* **Strict Localhost (`127.0.0.1`)**: Binds strictly to local loopback by default. Remote/LAN access is rejected unless explicitly enabled via `NOVA_ALLOW_LAN=1`. Any attempt to bind to a non-loopback address without this flag fails startup with an explicit security violation.
+* **Server-Side User Authorization**: Command execution requires both a single-use cryptographic approval token (60s TTL) AND verified server-side user authorization (`NOVA_ADMIN_KEY` or persistent session credential). Token issuance alone cannot trigger execution.
+* **LAN Mode Authentication**: When `NOVA_ALLOW_LAN=1` is enabled, all sensitive administrative routes (`/api/terminal/*`, `/api/modelfile`, `/api/settings`, etc.) require cryptographic token authentication (`Authorization: Bearer <key>` or `X-Nova-Auth`).
+* **Path Confinement & Catastrophic Blocking**: Command working directories are strictly constrained within the workspace directory, blocking path traversal and symlink escapes. Destructive system commands are automatically blocked.
+* **Zero Telemetry & 100% Offline Core**: Local model inference and hardware monitoring are 100% offline. No analytics, tracking pixels, or accounts.
+* **Security Headers & CSRF Defense**: Enforces strict origin checking on state-changing API endpoints and standard defensive security headers (`nosniff`, `SAMEORIGIN`, `strict-origin-when-cross-origin`).
 
 ![Trust & Privacy Transparency](docs/screenshots/trust_privacy_modal.png)
 
@@ -106,7 +106,10 @@ print(response.choices[0].message.content)
 # Core Configuration
 NOVA_HOST=127.0.0.1                     # Strict loopback binding (Default: 127.0.0.1)
 NOVA_PORT=8080                          # Dashboard port (Default: 8080)
-NOVA_ALLOW_LAN=0                        # Set to 1 ONLY to allow external LAN access (Warning: exposes API)
+NOVA_ALLOW_LAN=0                        # Set to 1 to permit non-loopback / LAN binding (Mandatory for non-loopback)
+NOVA_ADMIN_KEY=your-secure-admin-token  # Custom admin token (auto-generated if omitted)
+NOVA_REQUIRE_AUTH=0                     # Set to 1 to enforce authentication even on localhost
+NOVA_DISABLE_TERMINAL=0                 # Set to 1 to completely disable terminal execution
 NOVA_BACKEND_URL=http://127.0.0.1:11434   # Ollama: 11434 | LM Studio: 1234 | vLLM: 8000
 NOVA_NO_BROWSER=0                       # Set to 1 to disable auto-opening browser on launch
 NOVA_CHECK_UPDATES=1                    # Set to 0 to completely disable passive GitHub release check

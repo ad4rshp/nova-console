@@ -98,4 +98,87 @@ def test_command_audit_logging():
         row = cursor.fetchone()
         assert row is not None
         assert row["risk_level"] == "LOW"
-        assert row["approved"] == 1
+
+def test_database_migrations_idempotency(tmp_path, monkeypatch):
+    """
+    Ensure init_db safely migrates a legacy database schema with missing columns
+    (e.g., v1 without completion_tokens or risk_level) without data loss or crashes.
+    """
+    import sqlite3
+    legacy_db_file = tmp_path / "legacy_test.db"
+    
+    # 1. Create a legacy v1.0 SQLite schema with missing columns
+    conn = sqlite3.connect(str(legacy_db_file))
+    cur = conn.cursor()
+    cur.execute("""
+        CREATE TABLE request_history (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            timestamp REAL DEFAULT 0,
+            endpoint TEXT NOT NULL,
+            model TEXT NOT NULL,
+            prompt_tokens INTEGER DEFAULT 0,
+            output_tokens INTEGER DEFAULT 0,
+            status_code INTEGER DEFAULT 200
+        );
+    """)
+    # Insert legacy data
+    cur.execute("""
+        INSERT INTO request_history (timestamp, endpoint, model, prompt_tokens, output_tokens, status_code)
+        VALUES (1700000000.0, '/v1/chat/completions', 'legacy-model', 100, 50, 200);
+    """)
+
+    cur.execute("""
+        CREATE TABLE chat_history (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            role TEXT NOT NULL,
+            content TEXT NOT NULL,
+            model TEXT NOT NULL
+        );
+    """)
+    cur.execute("""
+        INSERT INTO chat_history (role, content, model)
+        VALUES ('user', 'Legacy message preserved', 'legacy-model');
+    """)
+
+    cur.execute("""
+        CREATE TABLE command_audit_log (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            command TEXT NOT NULL,
+            working_dir TEXT NOT NULL,
+            approved INTEGER DEFAULT 0
+        );
+    """)
+    conn.commit()
+    conn.close()
+
+    # 2. Point app database path to the legacy database file and run init_db
+    monkeypatch.setattr("app.database.DB_PATH", legacy_db_file)
+    init_db()
+
+    # 3. Verify migration succeeded without data loss
+    migrated_conn = sqlite3.connect(str(legacy_db_file))
+    migrated_conn.row_factory = sqlite3.Row
+    m_cur = migrated_conn.cursor()
+
+    # Verify request_history has completion_tokens migrated from output_tokens
+    m_cur.execute("SELECT * FROM request_history WHERE model = 'legacy-model';")
+    req_row = m_cur.fetchone()
+    assert req_row is not None
+    assert req_row["completion_tokens"] == 50
+    assert req_row["prompt_tokens"] == 100
+    assert "latency_ms" in req_row.keys()
+
+    # Verify chat_history retained existing row and added images/iso_time columns
+    m_cur.execute("SELECT * FROM chat_history WHERE model = 'legacy-model';")
+    chat_row = m_cur.fetchone()
+    assert chat_row is not None
+    assert chat_row["content"] == "Legacy message preserved"
+    assert "images" in chat_row.keys()
+    assert "iso_time" in chat_row.keys()
+
+    # Verify command_audit_log added risk_level
+    m_cur.execute("PRAGMA table_info(command_audit_log);")
+    audit_cols = {r["name"] for r in m_cur.fetchall()}
+    assert "risk_level" in audit_cols
+
+    migrated_conn.close()

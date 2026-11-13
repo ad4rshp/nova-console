@@ -19,7 +19,18 @@ if sys.version_info < (3, 10):
 BASE_DIR = Path(__file__).resolve().parent
 sys.path.insert(0, str(BASE_DIR))
 
-from app.config import PORT, HOST, LLM_BACKEND_URL, NOVA_ALLOW_LAN
+try:
+    from app.config import PORT, HOST, LLM_BACKEND_URL, NOVA_ALLOW_LAN
+except ValueError as e:
+    print("\n" + "=" * 60)
+    print(f"  [SECURITY CONFIGURATION ERROR] {e}")
+    print("  To permit binding to a non-loopback or LAN interface, run:")
+    print("    set NOVA_ALLOW_LAN=1    (Windows Command Prompt)")
+    print("    $env:NOVA_ALLOW_LAN=1  (Windows PowerShell)")
+    print("    export NOVA_ALLOW_LAN=1 (Linux/macOS)")
+    print("=" * 60 + "\n")
+    sys.exit(1)
+
 import uvicorn
 
 def main():
