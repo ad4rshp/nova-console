@@ -2,8 +2,8 @@ from app.services.providers.base import LLMProvider
 from app.services.providers.factory import create_provider_by_type, detect_provider, get_provider
 from app.services.providers.ollama import OllamaAdapter
 from app.services.providers.openai_compatible import (
-    LlamaServerAdapter,
     LMStudioAdapter,
+    LlamaServerAdapter,
     LocalAIAdapter,
     OpenAICompatibleAdapter,
     VLLMAdapter,
