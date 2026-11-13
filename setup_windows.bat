@@ -27,7 +27,11 @@ if not exist "%INSTALL_DIR%" mkdir "%INSTALL_DIR%"
 
 if not exist "%SRC_DIR%app" (
     echo [*] Standalone web runner detected. Fetching latest Nova Console from GitHub...
-    powershell -NoProfile -Command "[Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls12; Invoke-WebRequest -Uri 'https://github.com/ad4rshp/nova-console/archive/refs/heads/main.zip' -OutFile '%TEMP%\nova-console.zip'; Expand-Archive -Path '%TEMP%\nova-console.zip' -DestinationPath '%TEMP%\nova-src' -Force"
+    curl.exe -fL "https://github.com/ad4rshp/nova-console/archive/refs/heads/main.zip" -o "%TEMP%\nova-console.zip" >nul 2>&1
+    if not exist "%TEMP%\nova-console.zip" (
+        powershell -NoProfile -Command "[Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls12; Invoke-WebRequest -UseBasicParsing -Uri 'https://github.com/ad4rshp/nova-console/archive/refs/heads/main.zip' -OutFile '%TEMP%\nova-console.zip'"
+    )
+    powershell -NoProfile -Command "Expand-Archive -Path '%TEMP%\nova-console.zip' -DestinationPath '%TEMP%\nova-src' -Force"
     xcopy /E /I /Y /Q "%TEMP%\nova-src\nova-console-main\*" "%INSTALL_DIR%\" >nul
     del "%TEMP%\nova-console.zip" >nul 2>&1
     rd /s /q "%TEMP%\nova-src" >nul 2>&1

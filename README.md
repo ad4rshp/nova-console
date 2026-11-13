@@ -34,11 +34,11 @@ We understand that modern developers and AI enthusiasts are rightly cautious of 
 
 Choose the easiest way to install and run Nova Console on your computer:
 
-| Platform | Direct Download | 1-Line Web Runner (No Git Required) |
+| Platform | Direct Download (1-Click) | 1-Line Web Runner (No Git Required) |
 | :--- | :--- | :--- |
-| **Windows** | ⬇️ **[Download `setup_windows.bat`](https://raw.githubusercontent.com/ad4rshp/nova-console/main/setup_windows.bat)** | `irm https://raw.githubusercontent.com/ad4rshp/nova-console/main/setup_windows.bat -OutFile setup.bat; .\setup.bat` |
-| **macOS / Linux** | ⬇️ **[Download `setup_unix.sh`](https://raw.githubusercontent.com/ad4rshp/nova-console/main/setup_unix.sh)** | `curl -fsSL https://raw.githubusercontent.com/ad4rshp/nova-console/main/setup_unix.sh \| bash` |
-| **Standalone .exe** | 📦 **[Latest GitHub Releases](https://github.com/ad4rshp/nova-console/releases/latest)** | Zero Python required · Download &amp; double-click. |
+| **Windows** | ⬇️ **[Download Nova Console (.zip)](https://github.com/ad4rshp/nova-console/archive/refs/heads/main.zip)**<br>*(Extract &amp; double-click `setup_windows.bat`)* | `powershell -Command "irm https://raw.githubusercontent.com/ad4rshp/nova-console/main/setup_windows.bat -OutFile setup.bat; .\setup.bat"` |
+| **macOS / Linux** | ⬇️ **[Download Nova Console (.tar.gz)](https://github.com/ad4rshp/nova-console/archive/refs/heads/main.tar.gz)**<br>*(Run `./setup_unix.sh`)* | `curl -fsSL https://raw.githubusercontent.com/ad4rshp/nova-console/main/setup_unix.sh \| bash` |
+| **Standalone .exe** | 📦 **[Latest GitHub Releases](https://github.com/ad4rshp/nova-console/releases/latest)** | Zero Python required · Pre-compiled single-file executable. |
 
 ---
 

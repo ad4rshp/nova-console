@@ -193,11 +193,21 @@ async def dashboard_chat(request: Request):
             "think": think
         }
 
-        async with httpx.AsyncClient(timeout=180.0) as client:
+        async with httpx.AsyncClient(timeout=httpx.Timeout(180.0, connect=8.0)) as client:
             try:
-                # Try native /api/chat first, fallback to standard /v1/chat/completions
+                # Native /api/chat with instant health check
                 chat_url = f"{LLM_BACKEND_URL}/api/chat"
                 async with client.stream("POST", chat_url, json=ollama_req) as response:
+                    if response.status_code != 200:
+                        body_err = await response.aread()
+                        err_text = body_err.decode(errors="replace")
+                        try:
+                            err_parsed = json.loads(err_text).get("error", err_text)
+                        except Exception:
+                            err_parsed = err_text
+                        yield json.dumps({"error": f"Inference Engine (HTTP {response.status_code}): {err_parsed}"}) + "\n"
+                        return
+
                     async for chunk in response.aiter_lines():
                         if not chunk.strip():
                             continue
@@ -215,6 +225,14 @@ async def dashboard_chat(request: Request):
                                 output_tokens = data["eval_count"]
                         except Exception:
                             pass
+            except httpx.ConnectError:
+                err_msg = f"Cannot connect to Ollama at {LLM_BACKEND_URL}. Ensure Ollama is running ('ollama serve') or select an active model."
+                yield json.dumps({"error": err_msg}) + "\n"
+                return
+            except httpx.ConnectTimeout:
+                err_msg = f"Connection timed out reaching {LLM_BACKEND_URL}. Check if your inference engine is frozen or starting up."
+                yield json.dumps({"error": err_msg}) + "\n"
+                return
             except Exception as exc:
                 err_json = json.dumps({"error": f"LLM streaming failed: {str(exc)}"})
                 yield f"{err_json}\n"

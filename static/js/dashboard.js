@@ -769,7 +769,10 @@
         const safeCode = escapeHtml(cb.code);
         const l = (cb.lang || '').toLowerCase();
         const isCmd = ['bash', 'sh', 'cmd', 'powershell', 'ps1', 'shell', 'terminal', 'bat'].includes(l);
+        const isPython = ['python', 'py'].includes(l);
         const escapedForAttr = cb.code.replace(/"/g, '&quot;').replace(/'/g, '&#39;');
+        const pythonCmd = isPython ? `python -c "${cb.code.replace(/"/g, '\\"').replace(/\r?\n/g, '; ')}"` : '';
+        const escapedPythonCmd = pythonCmd.replace(/"/g, '&quot;').replace(/'/g, '&#39;');
         htmlOut.push(`
           <div class="code-box">
             <div class="code-box-header">
@@ -779,6 +782,12 @@
                   <button class="code-exec-btn" onclick="requestCommandExecution(this)" data-cmd="${escapedForAttr}" title="Execute in terminal with approval">
                     <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="4 17 10 11 4 5"/><line x1="12" y1="19" x2="20" y2="19"/></svg>
                     <span>Run</span>
+                  </button>
+                ` : ''}
+                ${isPython ? `
+                  <button class="code-exec-btn" onclick="requestCommandExecution(this)" data-cmd="${escapedPythonCmd}" title="Run Python script in terminal sandbox">
+                    <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="4 17 10 11 4 5"/><line x1="12" y1="19" x2="20" y2="19"/></svg>
+                    <span>Run Python</span>
                   </button>
                 ` : ''}
                 <button class="code-copy-btn" onclick="copyCode(this)" title="Copy Code">
@@ -1027,6 +1036,15 @@
     let accumulatedContent = '';
     let accumulatedThinking = '';
 
+    // Progressive status updates while model warms up
+    const waveSpan = msgEl.querySelector('#streamingWave span');
+    const statusTimers = [
+      setTimeout(() => { if (waveSpan) waveSpan.textContent = 'Nova is loading model into memory…'; }, 3000),
+      setTimeout(() => { if (waveSpan) waveSpan.textContent = 'Allocating VRAM / system buffers…'; }, 8000),
+      setTimeout(() => { if (waveSpan) waveSpan.textContent = 'Cold start in progress… generating first token…'; }, 16000)
+    ];
+    const clearStatusTimers = () => statusTimers.forEach(t => clearTimeout(t));
+
     try {
       const model = document.querySelector('#chatModelSelect').value || 'nova:latest';
       const think = document.querySelector('#chatThinkToggle').checked;
@@ -1081,10 +1099,12 @@
           }
 
           if (data.error) {
+            clearStatusTimers();
             throw new Error(data.error);
           }
 
           if (data.message) {
+            clearStatusTimers();
             if (data.message.thinking) {
               accumulatedThinking += data.message.thinking;
               const pMode = document.querySelector('#previewThinkingSelect')?.value || latestDashboardData?.settings?.preview_thinking || 'summary';
@@ -1116,16 +1136,22 @@
         }
       }
 
+      clearStatusTimers();
       chatHistory[assistantIndex].content = accumulatedContent;
       chatHistory[assistantIndex].thinking = accumulatedThinking;
       renderChatMessages();
 
     } catch (err) {
+      clearStatusTimers();
       if (msgEl) msgEl.remove();
-      showToast({ title: 'Request Failed', message: String(err), type: 'error', duration: 10000 });
-      chatHistory[assistantIndex] = { role: 'assistant', content: `⚠️ Request failed: ${err.message || err}` };
+      showToast({ title: 'Request Failed', message: String(err.message || err), type: 'error', duration: 10000 });
+      chatHistory[assistantIndex] = {
+        role: 'assistant',
+        content: `⚠️ **Inference Connection Notice**\n\n${err.message || err}\n\n*Tip: If Ollama isn't running, run \`ollama serve\` or select an active model in the top-right dropdown.*`
+      };
       renderChatMessages();
     } finally {
+      clearStatusTimers();
       sendBtn.disabled = false;
       loadDashboard();
       document.querySelector('#chatInput').focus();
