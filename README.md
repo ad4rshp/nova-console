@@ -13,14 +13,30 @@ Works on **Windows, macOS, and Linux** with **Ollama, LM Studio, vLLM, and Local
 
 ---
 
-## ⚡ Quick Install
+## Quickstart
 
-| Platform | 1-Click Download | Terminal One-Liner (No Git Needed) |
-| :--- | :--- | :--- |
-| **Windows** | ⬇️ **[Download (.zip)](https://github.com/ad4rshp/nova-console/archive/refs/heads/main.zip)** *(run `setup_windows.bat`)* | `powershell -Command "irm https://raw.githubusercontent.com/ad4rshp/nova-console/main/setup_windows.bat -OutFile setup.bat; .\setup.bat"` |
-| **macOS / Linux** | ⬇️ **[Download (.tar.gz)](https://github.com/ad4rshp/nova-console/archive/refs/heads/main.tar.gz)** *(run `./setup_unix.sh`)* | `curl -fsSL https://raw.githubusercontent.com/ad4rshp/nova-console/main/setup_unix.sh \| bash` |
-| **Manual (Git)** | `git clone https://github.com/ad4rshp/nova-console.git` | `cd nova-console && pip install -r requirements.txt && python launch.py` |
-| **Standalone .exe** | 📦 **[GitHub Releases](https://github.com/ad4rshp/nova-console/releases/latest)** | Single binary · Zero Python required. |
+### Windows
+Run in PowerShell (no Git or manual setup required):
+```powershell
+irm https://raw.githubusercontent.com/ad4rshp/nova-console/main/setup_windows.bat -OutFile setup.bat; .\setup.bat
+```
+*Or download the **[Source Zip](https://github.com/ad4rshp/nova-console/archive/refs/heads/main.zip)**, extract, and double-click `setup_windows.bat`.*
+
+### macOS & Linux
+Run in Terminal:
+```bash
+curl -fsSL https://raw.githubusercontent.com/ad4rshp/nova-console/main/setup_unix.sh | bash
+```
+
+### From Source (All Platforms)
+```bash
+git clone https://github.com/ad4rshp/nova-console.git
+cd nova-console
+pip install -r requirements.txt
+python launch.py
+```
+
+*Pre-compiled standalone `.exe` binaries are also available on [GitHub Releases](https://github.com/ad4rshp/nova-console/releases).*
 
 ---
 
