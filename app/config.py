@@ -12,7 +12,10 @@ else:
     STATIC_DIR = BASE_DIR
 
 DB_PATH = BASE_DIR / "nova-dashboard.db"
-MODELFILE_PATH = BASE_DIR / "Modelfile"
+MODELFILE_PATH = BASE_DIR / "app" / "Modelfile"
+if not MODELFILE_PATH.exists() and (BASE_DIR / "Modelfile").exists():
+    MODELFILE_PATH = BASE_DIR / "Modelfile"
+TEMPLATES_DIR = (BUNDLE_DIR if getattr(sys, "frozen", False) and hasattr(sys, "_MEIPASS") else BASE_DIR) / "app" / "templates"
 
 # Network & Service Configuration
 PORT = int(os.environ.get("NOVA_PORT", os.environ.get("PORT", 8080)))

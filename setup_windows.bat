@@ -35,11 +35,9 @@ if not exist "%SRC_DIR%app" (
     echo [*] Copying application files...
     xcopy /E /I /Y /Q "%SRC_DIR%app" "%INSTALL_DIR%\app" >nul
     xcopy /E /I /Y /Q "%SRC_DIR%static" "%INSTALL_DIR%\static" >nul
-    copy /Y "%SRC_DIR%dashboard.html" "%INSTALL_DIR%\" >nul
     copy /Y "%SRC_DIR%launch.py" "%INSTALL_DIR%\" >nul
     copy /Y "%SRC_DIR%requirements.txt" "%INSTALL_DIR%\" >nul
     copy /Y "%SRC_DIR%.env.example" "%INSTALL_DIR%\.env.example" >nul
-    if exist "%SRC_DIR%Modelfile" copy /Y "%SRC_DIR%Modelfile" "%INSTALL_DIR%\" >nul
 )
 
 cd /d "%INSTALL_DIR%"

@@ -86,12 +86,17 @@ class ExecuteCommandPayload(BaseModel):
 # --- Frontend HTML Delivery ---
 @app.get("/", response_class=HTMLResponse)
 async def serve_dashboard():
-    dashboard_file = STATIC_DIR / "dashboard.html"
-    if not dashboard_file.exists():
-        dashboard_file = BASE_DIR / "dashboard.html"
-    if not dashboard_file.exists():
-        raise HTTPException(status_code=404, detail="dashboard.html not found")
-    return HTMLResponse(content=dashboard_file.read_text(encoding="utf-8"))
+    candidates = [
+        BASE_DIR / "app" / "templates" / "dashboard.html",
+        STATIC_DIR / "app" / "templates" / "dashboard.html",
+        STATIC_DIR / "templates" / "dashboard.html",
+        STATIC_DIR / "dashboard.html",
+        BASE_DIR / "dashboard.html",
+    ]
+    for candidate in candidates:
+        if candidate.exists():
+            return HTMLResponse(content=candidate.read_text(encoding="utf-8"))
+    raise HTTPException(status_code=404, detail="dashboard.html not found")
 
 # --- Core Dashboard API ---
 @app.get("/api/dashboard")

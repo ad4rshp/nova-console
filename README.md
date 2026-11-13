@@ -53,8 +53,8 @@ Choose the easiest way to install and run Nova Console on your computer:
   - Installs to `~/.local/share/nova-console`.
   - Creates a global `nova-console` command in `~/.local/bin/` so you can launch it anytime from any terminal.
 - **Portable / No Installation**:
-  - Windows: Double-click **`Start Nova Console.bat`** to run directly from the folder.
-  - macOS / Linux: Run **`./start.sh`**.
+  - Run directly via Python: `python launch.py`
+  - Or use helper scripts in `scripts/`: `scripts/Start Nova Console.bat` (Windows) or `./scripts/start.sh` (macOS/Linux).
 
 ### Standalone Executable (.exe / Binary)
 To build a single standalone binary with zero Python dependencies required for end-users:

@@ -38,7 +38,6 @@ def build():
         "--onefile",
         # Include data files
         "--add-data", f"{BASE_DIR / 'static'}{sep}static",
-        "--add-data", f"{BASE_DIR / 'dashboard.html'}{sep}.",
         "--add-data", f"{BASE_DIR / 'app'}{sep}app",
         # Hidden imports for FastAPI / Uvicorn
         "--hidden-import", "uvicorn",

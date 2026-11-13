@@ -1,4 +1,5 @@
 import json
+from pathlib import Path
 import re
 import subprocess
 import time
@@ -7,8 +8,34 @@ import httpx
 from app.config import MODELFILE_PATH, PARAM_LIMITS, OLLAMA_HOST, DEFAULT_MODEL
 from app.database import get_db
 
+DEFAULT_MODELFILE_CONTENT = """FROM qwen2.5-coder:1.5b
+
+PARAMETER num_ctx 8192
+PARAMETER num_predict 2048
+PARAMETER temperature 0.2
+PARAMETER top_k 20
+PARAMETER top_p 0.95
+PARAMETER repeat_penalty 1.05
+
+SYSTEM \"\"\"
+You are Nova, an elite local coding, tool-use, and systems assistant powered by Ollama.
+
+Operational Principles:
+1. Precision & Verification: Inspect files before modifying; verify results using available tools.
+2. Structured Execution: Break complex tasks into verifiable phases.
+3. Concise Clarity: Avoid conversational filler; provide direct code, commands, or explanations.
+\"\"\"
+"""
+
+def ensure_modelfile() -> Path:
+    if not MODELFILE_PATH.exists():
+        MODELFILE_PATH.parent.mkdir(parents=True, exist_ok=True)
+        MODELFILE_PATH.write_text(DEFAULT_MODELFILE_CONTENT, encoding="utf-8")
+    return MODELFILE_PATH
+
 def read_modelfile() -> dict[str, Any]:
-    text = MODELFILE_PATH.read_text(encoding="utf-8") if MODELFILE_PATH.exists() else ""
+    ensure_modelfile()
+    text = MODELFILE_PATH.read_text(encoding="utf-8")
     values: dict[str, str] = {}
     for key, value in re.findall(r"^PARAMETER\s+(\w+)\s+([^\s]+)", text, re.MULTILINE | re.IGNORECASE):
         values[key.lower()] = value
@@ -24,8 +51,7 @@ def read_modelfile() -> dict[str, Any]:
     }
 
 def update_modelfile(values: dict[str, Any]) -> dict[str, Any]:
-    if not MODELFILE_PATH.exists():
-        raise ValueError("Modelfile is missing")
+    ensure_modelfile()
     text = MODELFILE_PATH.read_text(encoding="utf-8")
 
     # Update parameters with safety bounds

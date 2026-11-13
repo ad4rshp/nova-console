@@ -31,11 +31,9 @@ else
     echo "[*] Copying application files..."
     cp -R "$SRC_DIR/app" "$INSTALL_DIR/"
     cp -R "$SRC_DIR/static" "$INSTALL_DIR/"
-    cp "$SRC_DIR/dashboard.html" "$INSTALL_DIR/"
     cp "$SRC_DIR/launch.py" "$INSTALL_DIR/"
     cp "$SRC_DIR/requirements.txt" "$INSTALL_DIR/"
     cp "$SRC_DIR/.env.example" "$INSTALL_DIR/" 2>/dev/null || true
-    [ -f "$SRC_DIR/Modelfile" ] && cp "$SRC_DIR/Modelfile" "$INSTALL_DIR/"
 fi
 
 cd "$INSTALL_DIR"
