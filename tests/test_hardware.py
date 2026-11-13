@@ -1,6 +1,7 @@
 import time
-import pytest
-from app.services.hardware import get_ram_stats, get_gpu_stats, get_storage_stats
+
+from app.services.hardware import get_gpu_stats, get_ram_stats, get_storage_stats
+
 
 def test_ram_stats_structure():
     """Ensure RAM statistics return valid measured fields without fabricating."""
@@ -25,7 +26,7 @@ def test_storage_stats_caching():
     """Ensure storage queries run quickly and utilize in-memory TTL caching."""
     t0 = time.perf_counter()
     s1 = get_storage_stats()
-    d1 = time.perf_counter() - t0
+    _d1 = time.perf_counter() - t0
 
     t1 = time.perf_counter()
     s2 = get_storage_stats()
@@ -36,4 +37,18 @@ def test_storage_stats_caching():
     # Second call should be instant (from cache)
     assert d2 < 0.05
     assert s1["model_dir_gb"] == s2["model_dir_gb"]
+
+def test_gpu_stats_typed_fields_and_integrity():
+    """Ensure GPU stats contains typed numeric metrics, memory classification, and dedicated/shared distinction."""
+    gpu = get_gpu_stats()
+    assert "memory_category" in gpu
+    assert "is_dedicated_vram" in gpu
+    assert isinstance(gpu["is_dedicated_vram"], bool)
+    if gpu.get("status") == "active":
+        assert isinstance(gpu["vram_percent"], (int, float))
+        assert 0 <= gpu["vram_percent"] <= 100
+        if gpu["type"] == "nvidia":
+            assert "gpus" in gpu
+            assert isinstance(gpu["gpus"], list)
+
 

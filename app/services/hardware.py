@@ -79,36 +79,55 @@ def get_gpu_stats() -> dict[str, Any]:
         try:
             cmd = [
                 nvsmi,
-                "--query-gpu=name,memory.used,memory.total,utilization.gpu",
+                "--query-gpu=index,name,memory.used,memory.total,utilization.gpu",
                 "--format=csv,noheader,nounits"
             ]
             res = subprocess.run(cmd, capture_output=True, text=True, timeout=3)
             if res.returncode == 0 and res.stdout.strip():
-                lines = [l.strip() for l in res.stdout.strip().split("\n") if l.strip()]
+                lines = [ln.strip() for ln in res.stdout.strip().split("\n") if ln.strip()]
                 if lines:
-                    line = lines[0]
-                    parts = [p.strip() for p in line.split(",")]
-                    if len(parts) >= 4:
-                        try:
-                            used_mb = float(parts[1])
-                            total_mb = float(parts[2])
-                            pct = int((used_mb / total_mb * 100)) if total_mb > 0 else 0
-                        except (ValueError, ZeroDivisionError):
-                            used_mb, total_mb, pct = 0.0, 0.0, 0
+                    gpu_list = []
+                    total_used_mb = 0
+                    total_capacity_mb = 0
+                    for line in lines:
+                        parts = [p.strip() for p in line.split(",")]
+                        if len(parts) >= 4:
+                            try:
+                                u_mb = int(float(parts[2]))
+                                t_mb = int(float(parts[3]))
+                                u_pct = int(u_mb / t_mb * 100) if t_mb > 0 else 0
+                            except (ValueError, ZeroDivisionError):
+                                u_mb, t_mb, u_pct = 0, 0, 0
 
-                        return {
-                            "type": "nvidia",
-                            "name": parts[0] + (f" (+{len(lines)-1} more)" if len(lines) > 1 else ""),
-                            "used_mb": str(int(used_mb)),
-                            "total_mb": str(int(total_mb)),
-                            "utilization": parts[3],
-                            "vram_percent": pct,
-                            "gpu_count": len(lines),
-                            "memory_category": "dedicated_vram",
-                            "is_dedicated_vram": True,
-                            "memory_description": "Dedicated GPU VRAM",
-                            "status": "active"
-                        }
+                            total_used_mb += u_mb
+                            total_capacity_mb += t_mb
+                            gpu_list.append({
+                                "index": int(parts[0]) if parts[0].isdigit() else 0,
+                                "name": parts[1],
+                                "used_mb": u_mb,
+                                "total_mb": t_mb,
+                                "utilization": parts[4],
+                                "vram_percent": u_pct
+                            })
+
+                    agg_pct = int(total_used_mb / total_capacity_mb * 100) if total_capacity_mb > 0 else 0
+                    primary_name = gpu_list[0]["name"] if gpu_list else "NVIDIA GPU"
+                    display_name = primary_name + (f" (+{len(gpu_list)-1} more)" if len(gpu_list) > 1 else "")
+
+                    return {
+                        "type": "nvidia",
+                        "name": display_name,
+                        "used_mb": total_used_mb,
+                        "total_mb": total_capacity_mb,
+                        "utilization": gpu_list[0]["utilization"] if gpu_list else "0",
+                        "vram_percent": agg_pct,
+                        "gpu_count": len(gpu_list),
+                        "gpus": gpu_list,
+                        "memory_category": "dedicated_vram",
+                        "is_dedicated_vram": True,
+                        "memory_description": "Dedicated GPU VRAM",
+                        "status": "active"
+                    }
         except Exception:
             pass
 
@@ -146,7 +165,7 @@ def get_gpu_stats() -> dict[str, Any]:
             cmd = [rocm_smi, "--showuse", "--showmeminfo", "vram", "--csv"]
             res = subprocess.run(cmd, capture_output=True, text=True, timeout=3)
             if res.returncode == 0 and res.stdout.strip():
-                lines = [l.strip() for l in res.stdout.strip().split("\n") if l.strip()]
+                lines = [ln.strip() for ln in res.stdout.strip().split("\n") if ln.strip()]
                 # Parse ROCm CSV if headers present
                 used_mb, total_mb, pct = None, None, None
                 for line in lines[1:]:  # skip header

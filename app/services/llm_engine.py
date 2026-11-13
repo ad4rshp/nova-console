@@ -1,12 +1,13 @@
-import json
-import time
 from typing import Any
+
 import httpx
-from app.config import LLM_BACKEND_URL, DEFAULT_MODEL, VERSION
-from app.services.modelfile import read_modelfile
-from app.services.hardware import get_ram_stats, get_gpu_stats, get_storage_stats
-from app.services.updater import check_for_updates
+
+from app.config import LLM_BACKEND_URL, VERSION
 from app.database import db_get_settings, db_get_usage_metrics
+from app.services.hardware import get_gpu_stats, get_ram_stats, get_storage_stats
+from app.services.modelfile import read_modelfile
+from app.services.updater import check_for_updates
+
 
 async def detect_engine_type(url: str, client: httpx.AsyncClient) -> tuple[str, list[dict[str, Any]], list[dict[str, Any]], str]:
     """
@@ -89,7 +90,7 @@ async def get_dashboard_state() -> dict[str, Any]:
         m_name = m.get("name") or m.get("model") or ""
         total_size = m.get("size", 0)
         vram_size = m.get("size_vram", 0)
-        
+
         # Detect if model is split between GPU VRAM and CPU RAM
         if total_size > 0 and vram_size < total_size:
             gpu_pct = round((vram_size / total_size) * 100)
@@ -101,7 +102,7 @@ async def get_dashboard_state() -> dict[str, Any]:
                 "vram_mb": round(vram_size / (1024 * 1024)),
                 "total_mb": round(total_size / (1024 * 1024))
             }
-        
+
         if m_name.startswith("nova") or not loaded_ctx:
             loaded_ctx = m.get("context_length")
             loaded_model_name = m_name
@@ -131,7 +132,7 @@ async def get_dashboard_state() -> dict[str, Any]:
             "level": "error",
             "title": "Inference Engine Offline",
             "message": f"Cannot reach local LLM server at {LLM_BACKEND_URL}. Ensure your engine (Ollama, LM Studio, vLLM, or llama-server) is running.",
-            "action": f"Start your local engine or set NOVA_BACKEND_URL in your environment.",
+            "action": "Start your local engine or set NOVA_BACKEND_URL in your environment.",
         })
     elif not models:
         diagnostics.append({

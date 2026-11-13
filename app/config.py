@@ -2,6 +2,7 @@ import ipaddress
 import os
 import sys
 from pathlib import Path
+from urllib.parse import urlparse
 
 # Base Paths (Fully dynamic, supports standalone .exe / PyInstaller / Frozen mode)
 if getattr(sys, "frozen", False) and hasattr(sys, "_MEIPASS"):
@@ -65,7 +66,7 @@ _env_host = os.environ.get("NOVA_HOST", "").strip()
 
 try:
     HOST = validate_bind_host(_env_host, NOVA_ALLOW_LAN)
-except ValueError as e:
+except ValueError:
     # If invalid host provided in environment without NOVA_ALLOW_LAN, raise to stop execution
     # or fallback to loopback if running in safe mode
     if os.environ.get("NOVA_SAFE_FALLBACK", "0") == "1":
@@ -81,7 +82,63 @@ except (ValueError, TypeError):
     PORT = 8080
 
 # Universal Inference Engine (Ollama: 11434, LM Studio: 1234, vLLM: 8000, LocalAI: 8080, custom OpenAI endpoint)
-LLM_BACKEND_URL = os.environ.get("NOVA_BACKEND_URL", os.environ.get("LLM_BACKEND_URL", os.environ.get("OLLAMA_HOST", "http://127.0.0.1:11434"))).rstrip("/")
+def validate_backend_url(raw_url: str) -> str:
+    """
+    Validates the LLM backend URL to prevent SSRF vulnerabilities.
+    Enforces http/https schemes and blocks dangerous targets such as cloud metadata endpoints.
+    """
+    cleaned = raw_url.strip().rstrip("/") if raw_url else ""
+    if not cleaned:
+        return "http://127.0.0.1:11434"
+
+    parsed = urlparse(cleaned)
+    scheme = (parsed.scheme or "").lower()
+    if scheme not in ("http", "https"):
+        raise ValueError(
+            f"Security Violation: Backend URL scheme must be http or https, received '{scheme}'."
+        )
+
+    hostname = (parsed.hostname or "").lower().strip("[]")
+    if not hostname:
+        raise ValueError("Security Violation: Backend URL must contain a valid hostname.")
+
+    # Block known cloud metadata endpoints and internal names
+    blocked_hostnames = {
+        "metadata.google.internal",
+        "instance-data",
+        "metadata",
+        "169.254.169.254",
+    }
+    if hostname in blocked_hostnames:
+        raise ValueError(f"Security Violation: Access to cloud metadata service ({hostname}) is strictly prohibited.")
+
+    # IP address validation for SSRF targets
+    try:
+        ip = ipaddress.ip_address(hostname)
+        if ip.is_link_local:
+            raise ValueError(f"Security Violation: Link-local backend address '{hostname}' is not permitted.")
+        if ip.is_multicast:
+            raise ValueError(f"Security Violation: Multicast backend address '{hostname}' is not permitted.")
+        if ip.is_reserved:
+            raise ValueError(f"Security Violation: Reserved backend address '{hostname}' is not permitted.")
+        if str(ip) == "169.254.169.254" or ip in ipaddress.ip_network("169.254.0.0/16"):
+            raise ValueError("Security Violation: Cloud metadata IP (169.254.0.0/16) is strictly prohibited.")
+    except ValueError as e:
+        if "Security Violation" in str(e):
+            raise
+        # Not a raw IP address; standard hostname allowed
+
+    return cleaned
+
+_raw_backend = os.environ.get("NOVA_BACKEND_URL", os.environ.get("LLM_BACKEND_URL", os.environ.get("OLLAMA_HOST", "http://127.0.0.1:11434")))
+try:
+    LLM_BACKEND_URL = validate_backend_url(_raw_backend)
+except ValueError:
+    if os.environ.get("NOVA_SAFE_FALLBACK", "0") == "1":
+        LLM_BACKEND_URL = "http://127.0.0.1:11434"
+    else:
+        raise
+
 OLLAMA_HOST = LLM_BACKEND_URL  # Backward compatibility alias
 
 # Default Model & Limits

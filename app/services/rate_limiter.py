@@ -2,7 +2,7 @@ import os
 import threading
 import time
 from collections import defaultdict, deque
-from typing import Optional
+
 
 class SlidingWindowRateLimiter:
     """
@@ -18,7 +18,7 @@ class SlidingWindowRateLimiter:
     def check_rate_limit(
         self,
         client_ip: str,
-        limit: Optional[int] = None
+        limit: int | None = None
     ) -> tuple[bool, int, float]:
         """
         Checks if the client IP is within rate limits.

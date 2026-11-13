@@ -1,17 +1,19 @@
 import os
-from typing import Optional
+
 import httpx
+
 from app.config import LLM_BACKEND_URL
 from app.services.providers.base import LLMProvider
 from app.services.providers.ollama import OllamaAdapter
 from app.services.providers.openai_compatible import (
-    OpenAICompatibleAdapter,
+    LlamaServerAdapter,
     LMStudioAdapter,
+    LocalAIAdapter,
+    OpenAICompatibleAdapter,
     VLLMAdapter,
-    LocalAIAdapter
 )
 
-_CACHED_PROVIDER: Optional[LLMProvider] = None
+_CACHED_PROVIDER: LLMProvider | None = None
 
 def create_provider_by_type(provider_type: str, url: str) -> LLMProvider:
     p_lower = provider_type.strip().lower()
@@ -23,6 +25,8 @@ def create_provider_by_type(provider_type: str, url: str) -> LLMProvider:
         return VLLMAdapter(url)
     elif p_lower in ("localai", "local_ai", "local-ai"):
         return LocalAIAdapter(url)
+    elif p_lower in ("llama", "llama.cpp", "llama-server", "llamacpp"):
+        return LlamaServerAdapter(url)
     else:
         return OpenAICompatibleAdapter(url)
 

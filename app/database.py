@@ -2,7 +2,9 @@ import json
 import sqlite3
 import time
 from typing import Any
+
 from app.config import DB_PATH
+
 
 def get_db() -> sqlite3.Connection:
     conn = sqlite3.connect(str(DB_PATH), timeout=15.0)
@@ -150,9 +152,12 @@ def init_db() -> None:
         cursor.execute("INSERT OR IGNORE INTO settings (key, value) VALUES ('save_chat_history', 'false');")
         cursor.execute("INSERT OR IGNORE INTO settings (key, value) VALUES ('preview_thinking', '\"summary\"');")
         cursor.execute("INSERT OR IGNORE INTO settings (key, value) VALUES ('theme', '\"light\"');")
+
+        # Track schema version
+        cursor.execute("INSERT OR IGNORE INTO schema_version (version) VALUES (2);")
         conn.commit()
 
-def db_get_settings() -> dict[str, Any]:
+def db_get_settings(include_internal: bool = False) -> dict[str, Any]:
     with get_db() as conn:
         cursor = conn.cursor()
         cursor.execute("SELECT key, value FROM settings;")
@@ -163,6 +168,8 @@ def db_get_settings() -> dict[str, Any]:
                 settings[row["key"]] = json.loads(row["value"])
             except Exception:
                 settings[row["key"]] = row["value"]
+        if not include_internal:
+            settings.pop("admin_auth_token", None)
         return settings
 
 def db_set_setting(key: str, value: Any) -> None:
@@ -311,13 +318,20 @@ def db_save_chat_message(role: str, content: str, thinking: str, model: str, ima
         conn.commit()
 
 def db_get_chat_history(limit: int = 100) -> list[dict[str, Any]]:
+    """
+    Returns the most recent chat messages up to limit, ordered chronologically.
+    """
     with get_db() as conn:
         cursor = conn.cursor()
         cursor.execute("""
             SELECT role, content, thinking, model, timestamp, images 
-            FROM chat_history 
-            ORDER BY id ASC 
-            LIMIT ?;
+            FROM (
+                SELECT id, role, content, thinking, model, timestamp, images 
+                FROM chat_history 
+                ORDER BY id DESC 
+                LIMIT ?
+            )
+            ORDER BY id ASC;
         """, (limit,))
         rows = []
         for r in cursor.fetchall():
@@ -357,5 +371,29 @@ def db_get_modelfile_history(limit: int = 10) -> list[dict[str, Any]]:
         """, (limit,))
         return [dict(row) for row in cursor.fetchall()]
 
-# Auto-migrate tables on import
-init_db()
+def db_cleanup_old_records(retention_days: int = 30, max_requests: int = 20000) -> dict[str, int]:
+    """
+    Retention policy: Removes request and audit logs older than retention_days,
+    and caps total request history rows to max_requests to prevent unbounded disk growth.
+    """
+    cutoff = time.time() - (retention_days * 86400)
+    with get_db() as conn:
+        c1 = conn.execute("DELETE FROM request_history WHERE timestamp < ?;", (cutoff,)).rowcount
+        c2 = conn.execute("DELETE FROM command_audit_log WHERE timestamp < datetime('now', ?);", (f"-{retention_days} days",)).rowcount
+        conn.execute("""
+            DELETE FROM request_history WHERE id NOT IN (
+                SELECT id FROM request_history ORDER BY id DESC LIMIT ?
+            );
+        """, (max_requests,))
+        conn.commit()
+        return {"deleted_requests": c1, "deleted_audit": c2}
+
+def db_checkpoint() -> None:
+    """
+    Executes a WAL checkpoint to flush pending write transactions to the main DB file.
+    """
+    try:
+        with get_db() as conn:
+            conn.execute("PRAGMA wal_checkpoint(TRUNCATE);")
+    except Exception:
+        pass

@@ -2,6 +2,7 @@ import os
 import sys
 import tempfile
 from pathlib import Path
+
 import pytest
 from fastapi.testclient import TestClient
 
@@ -13,8 +14,9 @@ sys.path.insert(0, str(BASE_DIR))
 test_db_dir = tempfile.mkdtemp()
 os.environ["NOVA_TEST_MODE"] = "1"
 
-from app.main import app
 from app.database import init_db
+from app.main import app
+
 
 @pytest.fixture(scope="session", autouse=True)
 def setup_test_environment():

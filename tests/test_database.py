@@ -1,19 +1,16 @@
-import time
-import pytest
 from app.database import (
-    init_db,
-    get_db,
-    db_record_request,
+    db_clear_chat_history,
+    db_get_chat_history,
     db_get_recent_requests,
     db_get_usage_metrics,
-    db_get_usage_summary,
-    db_save_chat_message,
-    db_get_chat_history,
-    db_clear_chat_history,
-    db_set_setting,
-    db_get_settings,
     db_record_command,
+    db_record_request,
+    db_save_chat_message,
+    db_set_setting,
+    get_db,
+    init_db,
 )
+
 
 def test_database_initialization_and_schema():
     """Ensure init_db creates all required tables with expected canonical columns."""
@@ -61,6 +58,7 @@ def test_db_record_request_and_metrics():
 
 def test_chat_history_lifecycle():
     """Ensure chat messages respect privacy settings (disabled by default) and clear cleanly."""
+    db_clear_chat_history()
     # 1. By default, save_chat_history is False, so messages are NOT stored in SQLite (Privacy by default)
     db_set_setting("save_chat_history", False)
     db_save_chat_message("user", "Private message not stored", "", "nova:latest")
@@ -106,7 +104,7 @@ def test_database_migrations_idempotency(tmp_path, monkeypatch):
     """
     import sqlite3
     legacy_db_file = tmp_path / "legacy_test.db"
-    
+
     # 1. Create a legacy v1.0 SQLite schema with missing columns
     conn = sqlite3.connect(str(legacy_db_file))
     cur = conn.cursor()
@@ -221,4 +219,36 @@ def test_token_source_tracking_actual_vs_estimated():
     assert "tokens_breakdown" in metrics
     assert metrics["tokens_breakdown"]["actual"] >= 150
     assert metrics["tokens_breakdown"]["estimated"] >= 280
+
+def test_chat_history_retrieval_returns_latest_chronological():
+    """Ensure db_get_chat_history returns the latest messages, not the oldest from inception."""
+    from app.database import db_clear_chat_history, db_get_chat_history, db_save_chat_message, db_set_setting
+    db_set_setting("save_chat_history", True)
+    db_clear_chat_history()
+
+    # Insert 10 sequential messages
+    for i in range(1, 11):
+        db_save_chat_message("user", f"Message {i}", "", "test-model")
+
+    # Fetch with limit=5: Must return messages 6, 7, 8, 9, 10 in chronological order
+    recent_5 = db_get_chat_history(limit=5)
+    assert len(recent_5) == 5
+    contents = [m["content"] for m in recent_5]
+    assert contents == ["Message 6", "Message 7", "Message 8", "Message 9", "Message 10"]
+
+def test_database_cleanup_retention():
+    """Ensure db_cleanup_old_records purges expired entries and caps table sizes."""
+    from app.database import db_cleanup_old_records, db_record_request, get_db
+    # Record requests
+    for i in range(15):
+        db_record_request(f"/v1/test/{i}", "test-model", 10, 10, 0.1, 10.0)
+
+    # Cleanup with a small max_requests limit of 5
+    result = db_cleanup_old_records(retention_days=30, max_requests=5)
+    assert "deleted_requests" in result
+
+    with get_db() as conn:
+        count = conn.execute("SELECT COUNT(*) FROM request_history;").fetchone()[0]
+        assert count <= 5
+
 

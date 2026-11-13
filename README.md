@@ -1,6 +1,6 @@
 # Nova Console
 
-Local hardware monitor, web UI, and OpenAI-compatible proxy for local LLM backends (Ollama, LM Studio, vLLM, LocalAI).
+Local hardware monitor, web UI, and OpenAI-compatible proxy for local LLM backends (Ollama, LM Studio, vLLM, LocalAI, llama.cpp).
 
 ![Nova Console Dashboard](docs/screenshots/dashboard_overview.png)
 
@@ -75,7 +75,7 @@ Set environment variables or use a `.env` file:
 | `NOVA_ADMIN_KEY` | *(auto-generated)* | Admin key for authenticated routes and terminal execution. |
 | `NOVA_REQUIRE_AUTH` | `0` | Set to `1` to enforce authentication on loopback as well. |
 | `NOVA_DISABLE_TERMINAL` | `0` | Set to `1` to disable terminal command execution. |
-| `NOVA_BACKEND_URL` | `http://127.0.0.1:11434` | Backend LLM server URL (Ollama, LM Studio, vLLM). |
+| `NOVA_BACKEND_URL` | `http://127.0.0.1:11434` | Backend LLM server URL (Ollama, LM Studio, vLLM, LocalAI, llama.cpp). |
 | `NOVA_NO_BROWSER` | `0` | Set to `1` to prevent opening the browser on launch. |
 | `NOVA_CHECK_UPDATES` | `1` | Set to `0` to disable GitHub release check. |
 

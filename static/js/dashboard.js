@@ -21,8 +21,8 @@
     toast.innerHTML = `
       ${icons[type] || icons.info}
       <div style="flex:1;">
-        <div class="toast-title">${title}</div>
-        ${message ? `<div class="toast-desc">${message}</div>` : ''}
+        <div class="toast-title">${escapeHtml(title)}</div>
+        ${message ? `<div class="toast-desc">${escapeHtml(message)}</div>` : ''}
       </div>
       <button class="toast-close" title="Dismiss">×</button>
       <div class="toast-bar" style="animation-duration:${duration}ms;background:${barColor}"></div>

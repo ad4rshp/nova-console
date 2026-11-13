@@ -1,7 +1,11 @@
 import json
-from typing import Any, AsyncGenerator
+from collections.abc import AsyncGenerator
+from typing import Any
+
 import httpx
+
 from app.services.providers.base import LLMProvider
+
 
 class OllamaAdapter(LLMProvider):
     """Adapter for Ollama native API (/api/*)."""
@@ -9,6 +13,19 @@ class OllamaAdapter(LLMProvider):
     @property
     def name(self) -> str:
         return "Ollama"
+
+    @property
+    def capabilities(self) -> dict[str, bool]:
+        return {
+            "streaming": True,
+            "model_listing": True,
+            "loaded_models_inspection": True,
+            "vram_eviction": True,
+            "thinking_extraction": True,
+            "modelfile_compilation": True,
+            "token_usage_reporting": True,
+            "slots_monitoring": False,
+        }
 
     async def health_check(self) -> dict[str, Any]:
         async with httpx.AsyncClient(timeout=2.5) as client:

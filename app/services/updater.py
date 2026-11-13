@@ -1,7 +1,9 @@
 import time
 from typing import Any
+
 import httpx
-from app.config import VERSION, GITHUB_REPO, CHECK_UPDATES
+
+from app.config import CHECK_UPDATES, GITHUB_REPO, VERSION
 
 _cached_update_result: dict[str, Any] | None = None
 _last_check_time: float = 0.0

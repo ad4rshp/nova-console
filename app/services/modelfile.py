@@ -1,11 +1,13 @@
 import json
-from pathlib import Path
 import re
 import subprocess
 import time
+from pathlib import Path
 from typing import Any
+
 import httpx
-from app.config import MODELFILE_PATH, PARAM_LIMITS, OLLAMA_HOST, DEFAULT_MODEL
+
+from app.config import MODELFILE_PATH, OLLAMA_HOST, PARAM_LIMITS
 from app.database import get_db
 
 DEFAULT_MODELFILE_CONTENT = """FROM qwen2.5-coder:1.5b

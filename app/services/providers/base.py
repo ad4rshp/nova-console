@@ -1,5 +1,7 @@
 from abc import ABC, abstractmethod
-from typing import Any, AsyncGenerator
+from collections.abc import AsyncGenerator
+from typing import Any
+
 
 class LLMProvider(ABC):
     """
@@ -14,8 +16,25 @@ class LLMProvider(ABC):
     @property
     @abstractmethod
     def name(self) -> str:
-        """Friendly provider name (e.g. 'Ollama', 'LM Studio', 'vLLM', 'LocalAI')."""
+        """Friendly provider name (e.g. 'Ollama', 'LM Studio', 'vLLM', 'LocalAI', 'llama-server')."""
         pass
+
+    @property
+    def capabilities(self) -> dict[str, bool]:
+        """
+        Declares supported backend capabilities.
+        Allows UI and proxy layers to distinguish unsupported features from empty/zero metrics.
+        """
+        return {
+            "streaming": True,
+            "model_listing": True,
+            "loaded_models_inspection": False,
+            "vram_eviction": False,
+            "thinking_extraction": True,
+            "modelfile_compilation": False,
+            "token_usage_reporting": True,
+            "slots_monitoring": False,
+        }
 
     @abstractmethod
     async def health_check(self) -> dict[str, Any]:

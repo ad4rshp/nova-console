@@ -1,14 +1,16 @@
-import os
 import time
+
 import pytest
+
 from app.config import HOST, NOVA_ALLOW_LAN, WORKSPACE_DIR
 from app.services.terminal import (
-    generate_approval_token,
-    verify_and_consume_token,
-    validate_working_dir,
     assess_command_risk,
+    generate_approval_token,
     run_system_command,
+    validate_working_dir,
+    verify_and_consume_token,
 )
+
 
 def test_default_network_binding_localhost():
     """Ensure the application defaults strictly to 127.0.0.1 loopback, never 0.0.0.0 without opt-in."""
@@ -169,7 +171,7 @@ def test_path_traversal_confinement_deep():
 
 def test_host_binding_bypasses():
     """Ensure all non-loopback bind hosts require NOVA_ALLOW_LAN=1, preventing bypasses."""
-    from app.config import validate_bind_host, is_loopback_host
+    from app.config import is_loopback_host, validate_bind_host
 
     # Non-loopback addresses that MUST raise ValueError when allow_lan=False
     blocked_hosts = [
@@ -289,6 +291,154 @@ def test_terminal_command_allowlist(monkeypatch):
     assert res_blocked["ok"] is False
     assert res_blocked["return_code"] == 403
     assert "not in the approved command allowlist" in res_blocked["error"]
+
+def test_backend_url_ssrf_protection():
+    """Ensure SSRF attacks, cloud metadata endpoints, and non-http schemes are blocked."""
+    from app.config import validate_backend_url
+
+    # Prohibited schemes
+    with pytest.raises(ValueError) as exc:
+        validate_backend_url("file:///etc/passwd")
+    assert "scheme must be http or https" in str(exc.value)
+
+    with pytest.raises(ValueError) as exc:
+        validate_backend_url("ftp://internal-server.local")
+    assert "scheme must be http or https" in str(exc.value)
+
+    # Cloud metadata endpoints
+    with pytest.raises(ValueError) as exc:
+        validate_backend_url("http://169.254.169.254/latest/meta-data/")
+    assert "strictly prohibited" in str(exc.value)
+
+    with pytest.raises(ValueError) as exc:
+        validate_backend_url("http://metadata.google.internal")
+    assert "strictly prohibited" in str(exc.value)
+
+    # Valid backends succeed
+    assert validate_backend_url("http://127.0.0.1:11434") == "http://127.0.0.1:11434"
+    assert validate_backend_url("http://localhost:1234") == "http://localhost:1234"
+    assert validate_backend_url("https://api.openai.com/v1") == "https://api.openai.com/v1"
+
+def test_token_in_query_string_ignored(client, monkeypatch):
+    """Ensure ?token= query parameter is ignored and does NOT authorize sensitive routes."""
+    from app.services.auth import get_or_create_admin_token
+    admin_token = get_or_create_admin_token()
+
+    monkeypatch.setattr("app.main.NOVA_ALLOW_LAN", True)
+
+    # Passing token in query string should return 401 Unauthorized
+    res = client.post(f"/api/settings?token={admin_token}", json={"theme": "dark"})
+    assert res.status_code == 401
+
+    # Passing token in header must succeed
+    res_hdr = client.post("/api/settings", json={"theme": "dark"}, headers={"X-Nova-Auth": admin_token})
+    assert res_hdr.status_code == 200
+
+def test_admin_token_not_leaked_in_settings(client):
+    """Ensure admin_auth_token is scrubbed and never exposed in settings or dashboard responses."""
+    # 1. GET /api/settings
+    res = client.get("/api/settings")
+    assert res.status_code == 200
+    assert "admin_auth_token" not in res.json()
+
+    # 2. POST /api/settings
+    res_post = client.post("/api/settings", json={"theme": "light"})
+    assert res_post.status_code == 200
+    assert "admin_auth_token" not in res_post.json()
+
+    # 3. GET /api/dashboard
+    res_dash = client.get("/api/dashboard")
+    assert res_dash.status_code == 200
+    dash_settings = res_dash.json().get("settings", {})
+    assert "admin_auth_token" not in dash_settings
+
+def test_request_size_limits(client):
+    """Ensure oversized request bodies are rejected with 413 Payload Too Large."""
+    # Exceeding 1MB on /api/settings
+    res_settings = client.post(
+        "/api/settings",
+        content="x" * 100,
+        headers={"Content-Length": str(2 * 1024 * 1024), "Content-Type": "application/json"}
+    )
+    assert res_settings.status_code == 413
+    assert "Payload Too Large" in res_settings.json().get("error", "")
+
+    # Exceeding 10MB on /v1/models
+    res_proxy = client.post(
+        "/v1/models",
+        content="x" * 100,
+        headers={"Content-Length": str(15 * 1024 * 1024), "Content-Type": "application/json"}
+    )
+    assert res_proxy.status_code == 413
+
+def test_terminal_sandbox_strict_chaining_blocked(monkeypatch):
+    """Ensure shell chaining operators are rejected in strict sandbox mode."""
+    from app.services.auth import get_or_create_admin_token
+    admin_token = get_or_create_admin_token()
+
+    monkeypatch.setenv("NOVA_TERMINAL_SANDBOX", "strict")
+
+    chaining_payloads = [
+        "echo safe; cat /etc/passwd",
+        "echo a && echo b",
+        "echo a || echo b",
+        "echo a | grep a",
+        "echo `whoami`",
+        "echo $(whoami)",
+    ]
+
+    for payload in chaining_payloads:
+        token_data = generate_approval_token(payload)
+        res = run_system_command(payload, approval_token=token_data["approval_token"], user_authorization=admin_token)
+        assert res["ok"] is False
+        assert res["return_code"] == 403
+        assert "forbidden" in res["error"].lower() or "blocked" in res["error"].lower()
+
+def test_terminal_concurrency_limit():
+    """Ensure concurrent terminal executions beyond the semaphore capacity return 429."""
+    from app.services.auth import get_or_create_admin_token
+    from app.services.terminal import _TERMINAL_SEMAPHORE
+    admin_token = get_or_create_admin_token()
+
+    # Artificially exhaust semaphore
+    for _ in range(3):
+        assert _TERMINAL_SEMAPHORE.acquire(blocking=False) is True
+
+    try:
+        t_data = generate_approval_token("echo concurrency_test")
+        res = run_system_command("echo concurrency_test", approval_token=t_data["approval_token"], user_authorization=admin_token)
+        assert res["ok"] is False
+        assert res["return_code"] == 429
+        assert "concurrency limit" in res["error"].lower()
+    finally:
+        # Release acquired slots
+        for _ in range(3):
+            _TERMINAL_SEMAPHORE.release()
+
+def test_csrf_deep_validation(client):
+    """Ensure CSRF validation checks scheme, host, and port."""
+    from app.config import PORT
+
+    # 1. Invalid port on localhost
+    res_bad_port = client.post(
+        "/api/clear-chat-history",
+        headers={"Origin": f"http://127.0.0.1:{PORT + 1111}"}
+    )
+    assert res_bad_port.status_code == 403
+
+    # 2. Invalid scheme
+    res_bad_scheme = client.post(
+        "/api/clear-chat-history",
+        headers={"Origin": f"ftp://127.0.0.1:{PORT}"}
+    )
+    assert res_bad_scheme.status_code == 403
+
+    # 3. Valid loopback and port
+    res_valid = client.post(
+        "/api/clear-chat-history",
+        headers={"Origin": f"http://127.0.0.1:{PORT}"}
+    )
+    assert res_valid.status_code == 200
 
 
 

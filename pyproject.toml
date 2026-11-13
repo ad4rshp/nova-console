@@ -1,0 +1,57 @@
+[build-system]
+requires = ["setuptools>=68.0", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "nova-console"
+version = "2.1.0"
+description = "Local AI Workstation, Hardware Monitoring Dashboard, and OpenAI-Compatible API Proxy"
+readme = "README.md"
+requires-python = ">=3.10"
+license = { text = "MIT" }
+authors = [{ name = "Adarsh P" }]
+dependencies = [
+    "fastapi>=0.110.0,<1.0.0",
+    "uvicorn[standard]>=0.28.0,<1.0.0",
+    "httpx>=0.27.0,<1.0.0",
+    "pydantic>=2.0.0,<3.0.0",
+    "psutil>=5.9.0,<7.0.0",
+]
+
+[project.optional-dependencies]
+dev = [
+    "pytest>=8.0.0,<10.0.0",
+    "pytest-asyncio>=0.23.0,<1.0.0",
+    "ruff>=0.4.0",
+    "bandit>=1.7.0",
+]
+
+[tool.pytest.ini_options]
+minversion = "8.0"
+testpaths = ["tests"]
+asyncio_mode = "strict"
+asyncio_default_fixture_loop_scope = "function"
+filterwarnings = [
+    "ignore::DeprecationWarning",
+    "ignore::starlette.exceptions.StarletteDeprecationWarning",
+    "ignore::_pytest.warning_types.PytestRemovedIn10Warning",
+]
+
+[tool.ruff]
+line-length = 120
+target-version = "py310"
+
+[tool.ruff.lint]
+select = ["E", "F", "W", "B", "I", "UP"]
+ignore = [
+    "E501", # Line length (managed by formatter)
+    "E402", # Module level import not at top of file
+    "B008", # Do not perform function call in argument defaults (FastAPI Depends)
+    "B904", # Within an except clause, raise exceptions with from err
+    "W291", # Trailing whitespace
+    "W293", # Blank line contains whitespace
+]
+
+[tool.bandit]
+exclude_dirs = ["tests", ".venv", "ollama-dashboard"]
+skips = ["B603", "B607", "B101", "B104", "B105", "B106", "B107", "B110", "B112", "B404"]

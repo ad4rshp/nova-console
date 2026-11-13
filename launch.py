@@ -10,7 +10,7 @@ import webbrowser
 from pathlib import Path
 
 # Verify Python version
-if sys.version_info < (3, 10):
+if sys.version_info < (3, 10):  # noqa: UP036
     print("Error: Nova Console requires Python 3.10 or higher.")
     print(f"Current version: {sys.version}")
     sys.exit(1)
@@ -20,7 +20,7 @@ BASE_DIR = Path(__file__).resolve().parent
 sys.path.insert(0, str(BASE_DIR))
 
 try:
-    from app.config import PORT, HOST, LLM_BACKEND_URL, NOVA_ALLOW_LAN
+    from app.config import HOST, LLM_BACKEND_URL, NOVA_ALLOW_LAN, PORT
 except ValueError as e:
     print("\n" + "=" * 60)
     print(f"  [SECURITY CONFIGURATION ERROR] {e}")
@@ -32,6 +32,7 @@ except ValueError as e:
     sys.exit(1)
 
 import uvicorn
+
 
 def main():
     print("=" * 60)

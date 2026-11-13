@@ -1,12 +1,13 @@
 from app.services.providers.base import LLMProvider
+from app.services.providers.factory import create_provider_by_type, detect_provider, get_provider
 from app.services.providers.ollama import OllamaAdapter
 from app.services.providers.openai_compatible import (
-    OpenAICompatibleAdapter,
+    LlamaServerAdapter,
     LMStudioAdapter,
-    VLLMAdapter,
     LocalAIAdapter,
+    OpenAICompatibleAdapter,
+    VLLMAdapter,
 )
-from app.services.providers.factory import get_provider, detect_provider, create_provider_by_type
 
 __all__ = [
     "LLMProvider",
@@ -15,6 +16,7 @@ __all__ = [
     "LMStudioAdapter",
     "VLLMAdapter",
     "LocalAIAdapter",
+    "LlamaServerAdapter",
     "get_provider",
     "detect_provider",
     "create_provider_by_type",

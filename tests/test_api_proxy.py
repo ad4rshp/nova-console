@@ -1,5 +1,3 @@
-import pytest
-from app.services.modelfile import update_modelfile, read_modelfile
 
 def test_dashboard_api_endpoint(client):
     """Ensure /api/dashboard returns structured state without crashing."""
@@ -123,5 +121,19 @@ def test_proxy_rate_limiting(client, monkeypatch):
 
     # Reset limiter for subsequent tests
     global_rate_limiter.reset()
+
+def test_request_correlation_id_header(client):
+    """Ensure X-Request-ID correlation header is assigned and returned on responses."""
+    # 1. Without client request ID, server generates one
+    res1 = client.get("/api/dashboard")
+    assert res1.status_code == 200
+    assert "X-Request-ID" in res1.headers
+    assert len(res1.headers["X-Request-ID"]) >= 8
+
+    # 2. Client-provided request ID is preserved
+    custom_id = "test-corr-id-12345"
+    res2 = client.get("/api/dashboard", headers={"X-Request-ID": custom_id})
+    assert res2.headers.get("X-Request-ID") == custom_id
+
 
 

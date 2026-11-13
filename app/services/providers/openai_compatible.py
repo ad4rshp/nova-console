@@ -1,7 +1,11 @@
 import json
-from typing import Any, AsyncGenerator
+from collections.abc import AsyncGenerator
+from typing import Any
+
 import httpx
+
 from app.services.providers.base import LLMProvider
+
 
 class OpenAICompatibleAdapter(LLMProvider):
     """
@@ -152,3 +156,24 @@ class VLLMAdapter(OpenAICompatibleAdapter):
 class LocalAIAdapter(OpenAICompatibleAdapter):
     def __init__(self, base_url: str):
         super().__init__(base_url, provider_name="LocalAI")
+
+class LlamaServerAdapter(OpenAICompatibleAdapter):
+    """Adapter for llama.cpp / llama-server HTTP server."""
+    def __init__(self, base_url: str):
+        super().__init__(base_url, provider_name="llama.cpp / llama-server")
+
+    @property
+    def capabilities(self) -> dict[str, bool]:
+        caps = super().capabilities.copy()
+        caps["slots_monitoring"] = True
+        return caps
+
+    async def health_check(self) -> dict[str, Any]:
+        async with httpx.AsyncClient(timeout=2.5) as client:
+            try:
+                res = await client.get(f"{self.base_url}/health")
+                if res.status_code == 200:
+                    return {"status": "online", "engine": self.name}
+            except Exception:
+                pass
+            return await super().health_check()

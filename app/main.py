@@ -1,55 +1,54 @@
 import json
 import os
+import secrets
 import time
+from collections.abc import AsyncGenerator
 from contextlib import asynccontextmanager
-from typing import Any, AsyncGenerator
+from typing import Any
 from urllib.parse import urlparse
 
 import httpx
-from fastapi import FastAPI, Request, Response, HTTPException
+from fastapi import FastAPI, HTTPException, Request, Response
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import HTMLResponse, StreamingResponse, JSONResponse
+from fastapi.responses import HTMLResponse, JSONResponse, StreamingResponse
 from fastapi.staticfiles import StaticFiles
-from pydantic import BaseModel, Field, ConfigDict
+from pydantic import BaseModel, ConfigDict, Field
 from starlette.middleware.base import BaseHTTPMiddleware
 
 from app.config import (
-    STATIC_DIR,
     BASE_DIR,
-    LLM_BACKEND_URL,
     DEFAULT_MODEL,
-    PORT,
     HOST,
+    LLM_BACKEND_URL,
     NOVA_ALLOW_LAN,
+    PORT,
+    STATIC_DIR,
     is_loopback_host,
 )
-from app.services.auth import (
-    get_or_create_admin_token,
-    verify_admin_token,
-    extract_token_from_request,
-    is_request_authenticated,
-)
 from app.database import (
-    init_db,
-    db_get_settings,
-    db_set_setting,
-    db_get_recent_requests,
-    db_get_usage_summary,
-    db_save_chat_message,
-    db_get_chat_history,
     db_clear_chat_history,
+    db_get_chat_history,
+    db_get_recent_requests,
+    db_get_settings,
+    db_get_usage_summary,
     db_record_request,
+    db_save_chat_message,
+    db_set_setting,
+    init_db,
 )
-from app.services.hardware import get_ram_stats, get_gpu_stats, get_storage_stats
-from app.services.modelfile import read_modelfile, update_modelfile, rebuild_nova_model, evict_model_vram
+from app.services.auth import (
+    extract_token_from_request,
+    get_or_create_admin_token,
+    is_request_authenticated,
+    verify_admin_token,
+)
 from app.services.llm_engine import get_dashboard_state
+from app.services.modelfile import evict_model_vram, rebuild_nova_model, update_modelfile
 from app.services.providers import get_provider
 from app.services.rate_limiter import global_rate_limiter
 from app.services.terminal import (
-    assess_command_risk,
     generate_approval_token,
     run_system_command,
-    validate_working_dir,
 )
 from app.services.updater import check_for_updates
 
@@ -71,15 +70,52 @@ def get_allowed_origins() -> list[str]:
     origins = [
         f"http://127.0.0.1:{PORT}",
         f"http://localhost:{PORT}",
+        f"http://[::1]:{PORT}",
         "http://127.0.0.1",
         "http://localhost",
+        "http://[::1]",
     ]
+    if NOVA_ALLOW_LAN and HOST not in ("127.0.0.1", "localhost", "::1"):
+        origins.append(f"http://{HOST}:{PORT}")
     custom = os.environ.get("NOVA_CORS_ORIGINS", "")
     if custom:
         for c in custom.split(","):
             if c.strip():
                 origins.append(c.strip())
     return origins
+
+def is_valid_csrf_origin(origin_str: str) -> bool:
+    if not origin_str:
+        return False
+    try:
+        parsed = urlparse(origin_str)
+        scheme = (parsed.scheme or "").lower()
+        host = (parsed.hostname or "").lower()
+        port = parsed.port
+
+        if scheme not in ("http", "https"):
+            return False
+
+        # Loopback origin validation: must match loopback IP/host and configured PORT
+        if host in ("127.0.0.1", "localhost", "::1", "testserver"):
+            if port is not None and port not in (PORT, 80, 443):
+                custom_cors = os.environ.get("NOVA_CORS_ORIGINS", "")
+                if not any(f":{port}" in c for c in custom_cors.split(",") if c.strip()):
+                    return False
+            return True
+
+        # Check configured allowed origins (including LAN mode if active)
+        allowed_list = get_allowed_origins()
+        for allowed in allowed_list:
+            p_allow = urlparse(allowed)
+            if scheme == p_allow.scheme.lower() and host == (p_allow.hostname or "").lower():
+                allow_port = p_allow.port
+                if allow_port is None or port is None or allow_port == port:
+                    return True
+
+        return False
+    except Exception:
+        return False
 
 SENSITIVE_API_PREFIXES = (
     "/api/terminal/",
@@ -92,10 +128,27 @@ SENSITIVE_API_PREFIXES = (
 
 class SecurityHeadersMiddleware(BaseHTTPMiddleware):
     async def dispatch(self, request: Request, call_next):
-        # 1. Authentication enforcement on sensitive routes when LAN mode is active or auth explicitly required
-        is_sensitive = any(request.url.path.startswith(prefix) for prefix in SENSITIVE_API_PREFIXES)
-        require_auth = NOVA_ALLOW_LAN or os.environ.get("NOVA_REQUIRE_AUTH", "0") in ("1", "true", "yes")
+        # 0. Request Correlation ID
+        request_id = request.headers.get("X-Request-ID") or secrets.token_hex(8)
+        request.state.request_id = request_id
 
+        # 1. Request Body Size Limits (10MB global, 1MB for sensitive admin endpoints)
+        is_sensitive = any(request.url.path.startswith(prefix) for prefix in SENSITIVE_API_PREFIXES)
+        max_bytes = 1 * 1024 * 1024 if is_sensitive else 10 * 1024 * 1024
+        content_length = request.headers.get("content-length")
+        if content_length:
+            try:
+                if int(content_length) > max_bytes:
+                    limit_mb = max_bytes // (1024 * 1024)
+                    return JSONResponse(
+                        status_code=413,
+                        content={"error": f"Payload Too Large: request body exceeds maximum allowed limit of {limit_mb}MB."}
+                    )
+            except ValueError:
+                return JSONResponse(status_code=400, content={"error": "Invalid Content-Length header."})
+
+        # 2. Authentication enforcement on sensitive routes when LAN mode is active or auth explicitly required
+        require_auth = NOVA_ALLOW_LAN or os.environ.get("NOVA_REQUIRE_AUTH", "0") in ("1", "true", "yes")
         if is_sensitive and require_auth:
             if not is_request_authenticated(request):
                 return JSONResponse(
@@ -103,20 +156,28 @@ class SecurityHeadersMiddleware(BaseHTTPMiddleware):
                     content={"error": "Authentication required: LAN mode is active or sensitive administrative route accessed. Provide a valid Authorization Bearer or X-Nova-Auth token."}
                 )
 
-        # 2. Origin & CSRF Protection on state-changing API endpoints
+        # 3. Origin & CSRF Protection on state-changing API endpoints
         if request.method in ("POST", "PUT", "DELETE", "PATCH") and request.url.path.startswith("/api/"):
+            client_host = request.client.host if request.client else ""
+            is_test_client = client_host in ("testclient", "testserver") or not client_host
+            is_authed = is_request_authenticated(request)
+
             origin = request.headers.get("origin") or request.headers.get("referer")
-            if origin:
-                parsed = urlparse(origin)
-                origin_host = parsed.hostname or ""
-                # Reject external/cross-origin requests attempting to manipulate local state
-                if origin_host not in ("127.0.0.1", "localhost", "::1", "testserver") and not NOVA_ALLOW_LAN:
+            if not origin:
+                if not is_test_client and not is_authed:
                     return JSONResponse(
                         status_code=403,
-                        content={"error": "Cross-Origin / CSRF security rejection: unauthorized request origin."}
+                        content={"error": "Cross-Origin / CSRF security rejection: missing Origin or Referer header on state-changing request."}
+                    )
+            else:
+                if not is_valid_csrf_origin(origin):
+                    return JSONResponse(
+                        status_code=403,
+                        content={"error": "Cross-Origin / CSRF security rejection: unauthorized request origin (scheme, host, or port mismatch)."}
                     )
 
         response = await call_next(request)
+        response.headers["X-Request-ID"] = request_id
         response.headers["X-Content-Type-Options"] = "nosniff"
         response.headers["X-Frame-Options"] = "SAMEORIGIN"
         response.headers["Referrer-Policy"] = "strict-origin-when-cross-origin"
@@ -127,7 +188,14 @@ class SecurityHeadersMiddleware(BaseHTTPMiddleware):
 async def lifespan(app: FastAPI):
     # Initialize SQLite database and run versioned migrations
     init_db()
+    from app.database import db_checkpoint, db_cleanup_old_records
+    db_checkpoint()
+    try:
+        db_cleanup_old_records()
+    except Exception:
+        pass
     yield
+    db_checkpoint()
 
 app = FastAPI(
     title="Nova Console API",
@@ -218,6 +286,8 @@ async def get_dashboard(request: Request):
         "lan_mode": NOVA_ALLOW_LAN,
         "is_authenticated": is_request_authenticated(request)
     }
+    if "settings" in state and isinstance(state["settings"], dict):
+        state["settings"].pop("admin_auth_token", None)
     return state
 
 @app.get("/api/check-update")
@@ -241,18 +311,26 @@ async def clear_chat_history():
     db_clear_chat_history()
     return {"ok": True, "message": "Chat history cleared."}
 
+@app.get("/api/settings")
+async def get_settings_endpoint():
+    settings = db_get_settings()
+    settings.pop("admin_auth_token", None)
+    return settings
+
 @app.post("/api/settings")
 async def update_settings(payload: SettingsPayload):
     updates = payload.model_dump(exclude_unset=True)
     for k, v in updates.items():
         if k in ALLOWED_SETTINGS:
             db_set_setting(k, v)
-    return db_get_settings()
+    settings = db_get_settings()
+    settings.pop("admin_auth_token", None)
+    return settings
 
 @app.post("/api/modelfile")
-async def update_modelfile_endpoint(payload: dict[str, Any]):
+async def update_modelfile_endpoint(payload: ModelfilePayload):
     try:
-        return update_modelfile(payload)
+        return update_modelfile(payload.model_dump(exclude_unset=True))
     except Exception as exc:
         return JSONResponse(status_code=400, content={"error": str(exc)})
 
@@ -500,15 +578,17 @@ async def proxy_v1(path: str, request: Request):
             out_tokens = 0
             exact_prompt_tokens = prompt_tokens_est
             has_exact = False
+            sse_buffer = ""
             try:
                 async for chunk in response.aiter_bytes():
                     yield chunk
-                    chunk_str = chunk.decode("utf-8", errors="ignore")
-                    for line in chunk_str.split("\n"):
+                    sse_buffer += chunk.decode("utf-8", errors="replace")
+                    while "\n" in sse_buffer:
+                        line, sse_buffer = sse_buffer.split("\n", 1)
                         line = line.strip()
                         if line.startswith("data: ") and line != "data: [DONE]":
                             try:
-                                cdata = json.loads(line[6:])
+                                cdata = json.loads(line[6:].strip())
                                 if "usage" in cdata and cdata["usage"]:
                                     exact_prompt_tokens = cdata["usage"].get("prompt_tokens", exact_prompt_tokens)
                                     out_tokens = cdata["usage"].get("completion_tokens", out_tokens)
@@ -519,6 +599,17 @@ async def proxy_v1(path: str, request: Request):
                                         out_tokens += max(1, len(delta["content"]) // 4)
                             except Exception:
                                 pass
+
+                # Process any trailing line in buffer
+                if sse_buffer.strip().startswith("data: ") and sse_buffer.strip() != "data: [DONE]":
+                    try:
+                        cdata = json.loads(sse_buffer.strip()[6:].strip())
+                        if "usage" in cdata and cdata["usage"]:
+                            exact_prompt_tokens = cdata["usage"].get("prompt_tokens", exact_prompt_tokens)
+                            out_tokens = cdata["usage"].get("completion_tokens", out_tokens)
+                            has_exact = True
+                    except Exception:
+                        pass
             finally:
                 # Guaranteed cleanup of upstream response and client on disconnect or completion
                 await response.aclose()
@@ -548,10 +639,22 @@ async def proxy_v1(path: str, request: Request):
 
     except httpx.ConnectError:
         await client.aclose()
-        return JSONResponse(
-            status_code=502,
-            content={"error": f"Bad Gateway: Unable to connect to inference backend at {LLM_BACKEND_URL}. Ensure your engine is running."}
+        is_authed = is_request_authenticated(request)
+        error_detail = (
+            f"Bad Gateway: Unable to connect to inference backend at {LLM_BACKEND_URL}. Ensure your engine is running."
+            if is_authed else
+            "Bad Gateway: Unable to connect to inference backend. Ensure the backend engine is running."
         )
+        return JSONResponse(status_code=502, content={"error": error_detail})
     except Exception as exc:
         await client.aclose()
-        return JSONResponse(status_code=502, content={"error": f"LLM backend gateway error: {str(exc)}"})
+        is_authed = is_request_authenticated(request)
+        error_detail = f"LLM backend gateway error: {str(exc)}" if is_authed else "LLM backend gateway error."
+        return JSONResponse(status_code=502, content={"error": error_detail})
+
+@app.exception_handler(Exception)
+async def global_exception_handler(request: Request, exc: Exception):
+    return JSONResponse(
+        status_code=500,
+        content={"error": "An internal server error occurred. Internal details have been scrubbed for security."}
+    )

@@ -4,17 +4,23 @@ import re
 import secrets
 import signal
 import subprocess
+import sys
 import threading
 import time
 from pathlib import Path
 from typing import Any
-from app.config import WORKSPACE_DIR, COMMAND_TIMEOUT_SECONDS
+
+from app.config import COMMAND_TIMEOUT_SECONDS, WORKSPACE_DIR
 from app.database import db_record_command
 
 # Server-side single-use cryptographic approval storage
 _APPROVAL_TOKENS: dict[str, dict[str, Any]] = {}
 _TOKENS_LOCK = threading.Lock()
 TOKEN_TTL_SECONDS = 60.0  # Tokens expire in 60 seconds
+
+# Terminal concurrency semaphore (Max 3 concurrent executions to prevent CPU/fork exhaustion)
+MAX_CONCURRENT_TERMINAL_COMMANDS = int(os.environ.get("NOVA_MAX_CONCURRENT_COMMANDS", "3"))
+_TERMINAL_SEMAPHORE = threading.BoundedSemaphore(MAX_CONCURRENT_TERMINAL_COMMANDS)
 
 # Absolute destructive blacklist (Blocked completely, never allowed)
 CATASTROPHIC_PATTERNS = [
@@ -42,6 +48,50 @@ DANGEROUS_PATTERNS = [
     "drop database",
     "drop table",
 ]
+
+def get_restricted_path() -> str:
+    """
+    Constructs a hardened, restricted PATH containing strictly standard system binaries
+    and the active Python virtual environment. Prevents execution of binaries from untrusted directories.
+    """
+    safe_dirs: list[str] = []
+    py_bin = Path(sys.executable).parent
+    safe_dirs.append(str(py_bin))
+
+    if platform.system() == "Windows":
+        sys_root = os.environ.get("SystemRoot", r"C:\Windows")
+        safe_dirs.extend([
+            os.path.join(sys_root, "System32"),
+            sys_root,
+            os.path.join(sys_root, "System32", "WindowsPowerShell", "v1.0"),
+            os.path.join(sys_root, "System32", "OpenSSH"),
+        ])
+    else:
+        safe_dirs.extend([
+            "/usr/bin",
+            "/bin",
+            "/usr/local/bin",
+            "/usr/sbin",
+            "/sbin",
+        ])
+
+    sep = ";" if platform.system() == "Windows" else ":"
+    existing = [d for d in safe_dirs if os.path.isdir(d)]
+    return sep.join(existing)
+
+def is_strict_sandbox() -> bool:
+    return os.environ.get("NOVA_TERMINAL_SANDBOX", "0").lower() in ("strict", "1", "true", "yes")
+
+def validate_command_chaining(command: str) -> tuple[bool, str]:
+    """
+    Detects shell chaining operators (;, &&, ||, |, &, `, $()) that can be used
+    for command injection or unauthorized lateral execution.
+    """
+    if is_strict_sandbox():
+        pattern = r"(;|&&|\|\||\|(?![&|])|(?<!&)&(?!&)|`|\$\()"
+        if re.search(pattern, command):
+            return False, "Command chaining and subshell operators (;, &&, ||, |, &, `, $()) are strictly forbidden when NOVA_TERMINAL_SANDBOX=strict."
+    return True, ""
 
 def validate_working_dir(requested_path: str | None) -> Path:
     """
@@ -71,6 +121,16 @@ def assess_command_risk(command: str) -> dict[str, Any]:
     Analyzes command safety and returns a risk category and warning.
     """
     cmd_lower = command.strip().lower()
+
+    # Check strict sandbox chaining rules
+    chain_ok, chain_msg = validate_command_chaining(cmd_lower)
+    if not chain_ok:
+        return {
+            "risk": "CRITICAL",
+            "warning": chain_msg,
+            "color": "#ef4444",
+            "blocked": True
+        }
 
     for pattern in CATASTROPHIC_PATTERNS:
         if re.search(pattern, cmd_lower):
@@ -294,6 +354,18 @@ def run_system_command(
             "working_dir": str(target_dir)
         }
 
+    # 3. Enforce Strict Sandbox Command Rules
+    chain_ok, chain_msg = validate_command_chaining(cmd_clean)
+    if not chain_ok:
+        return {
+            "ok": False,
+            "error": chain_msg,
+            "return_code": 403,
+            "output": "",
+            "working_dir": str(target_dir),
+            "risk_level": "BLOCKED"
+        }
+
     assessment = assess_command_risk(cmd_clean)
     if assessment.get("blocked", False):
         return {
@@ -302,6 +374,18 @@ def run_system_command(
             "return_code": 403,
             "output": "",
             "working_dir": str(target_dir)
+        }
+
+    # 4. Enforce Concurrency Semaphore (Max 3 concurrent executions)
+    acquired = _TERMINAL_SEMAPHORE.acquire(blocking=True, timeout=2.0)
+    if not acquired:
+        return {
+            "ok": False,
+            "error": "Terminal execution concurrency limit reached (max 3 concurrent processes).",
+            "return_code": 429,
+            "output": "",
+            "working_dir": str(target_dir),
+            "risk_level": "BLOCKED"
         }
 
     risk_level = assessment.get("risk", "MEDIUM")
@@ -316,11 +400,14 @@ def run_system_command(
     ]:
         safe_env.pop(sensitive_key, None)
 
+    # Restrict PATH to safe system locations and virtual environment
+    safe_env["PATH"] = get_restricted_path()
+
     proc = None
     try:
         if is_windows:
             proc = subprocess.Popen(
-                ["powershell", "-NoProfile", "-ExecutionPolicy", "Bypass", "-Command", cmd_clean],
+                ["powershell", "-NoProfile", "-NonInteractive", "-ExecutionPolicy", "Bypass", "-Command", cmd_clean],
                 cwd=str(target_dir),
                 stdout=subprocess.PIPE,
                 stderr=subprocess.PIPE,
@@ -329,9 +416,13 @@ def run_system_command(
                 creationflags=subprocess.CREATE_NEW_PROCESS_GROUP
             )
         else:
+            bash_cmd = ["/bin/bash", "--noprofile", "--norc"]
+            if is_strict_sandbox():
+                bash_cmd.append("--restricted")
+            bash_cmd.extend(["-c", cmd_clean])
             proc = subprocess.Popen(
-                cmd_clean,
-                shell=True,
+                bash_cmd,
+                shell=False,
                 cwd=str(target_dir),
                 stdout=subprocess.PIPE,
                 stderr=subprocess.PIPE,
@@ -397,3 +488,5 @@ def run_system_command(
             "working_dir": str(target_dir),
             "risk_level": risk_level
         }
+    finally:
+        _TERMINAL_SEMAPHORE.release()

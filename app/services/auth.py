@@ -1,10 +1,11 @@
 import os
 import secrets
-from typing import Optional
+
 from fastapi import Request
+
 from app.database import db_get_settings, db_set_setting
 
-_CACHED_ADMIN_TOKEN: Optional[str] = None
+_CACHED_ADMIN_TOKEN: str | None = None
 
 def get_or_create_admin_token() -> str:
     """
@@ -40,7 +41,7 @@ def get_or_create_admin_token() -> str:
             _CACHED_ADMIN_TOKEN = secrets.token_hex(24)
         return _CACHED_ADMIN_TOKEN
 
-def verify_admin_token(provided_token: Optional[str]) -> bool:
+def verify_admin_token(provided_token: str | None) -> bool:
     """
     Performs constant-time comparison of the provided token against the server admin token.
     """
@@ -49,25 +50,23 @@ def verify_admin_token(provided_token: Optional[str]) -> bool:
     expected = get_or_create_admin_token()
     return secrets.compare_digest(provided_token.strip(), expected.strip())
 
-def extract_token_from_request(request: Request) -> Optional[str]:
+def extract_token_from_request(request: Request) -> str | None:
     """
-    Extracts authorization token from request headers or query params.
+    Extracts authorization token strictly from secure request headers.
     Supports:
     - Authorization: Bearer <token>
     - X-Nova-Auth: <token>
-    - ?token=<token>
+    
+    Security note: Query parameters (?token=) are explicitly disallowed to prevent
+    credential leakage in access logs, browser history, and Referer headers.
     """
     auth_header = request.headers.get("Authorization", "")
     if auth_header.startswith("Bearer "):
         return auth_header[7:].strip()
-    
+
     x_nova_auth = request.headers.get("X-Nova-Auth", "")
     if x_nova_auth:
         return x_nova_auth.strip()
-
-    query_token = request.query_params.get("token")
-    if query_token:
-        return query_token.strip()
 
     return None
 

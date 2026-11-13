@@ -5,10 +5,9 @@ Uses PyInstaller to package Nova Console into a standalone executable for Window
 Usage:
     python scripts/build_executable.py
 """
-import sys
-import os
 import platform
 import subprocess
+import sys
 from pathlib import Path
 
 BASE_DIR = Path(__file__).resolve().parent.parent
@@ -21,9 +20,8 @@ def build():
     print("=" * 60)
 
     # 1. Verify PyInstaller is installed
-    try:
-        import PyInstaller
-    except ImportError:
+    import importlib.util
+    if not importlib.util.find_spec("PyInstaller"):
         print("Installing pyinstaller...")
         subprocess.check_call([sys.executable, "-m", "pip", "install", "pyinstaller"])
 
@@ -66,7 +64,7 @@ def build():
         exe_name = "NovaConsole.exe" if platform.system() == "Windows" else "NovaConsole"
         dist_path = BASE_DIR / "dist" / exe_name
         print("\n" + "=" * 60)
-        print(f"  🎉 SUCCESS! Standalone binary built:")
+        print("  🎉 SUCCESS! Standalone binary built:")
         print(f"  {dist_path}")
         print("=" * 60)
     else:
