@@ -21,14 +21,22 @@ mkdir -p "$BIN_DIR"
 
 SRC_DIR="$( cd "$( dirname "${BASH_SOURCE[0]}" )" >/dev/null 2>&1 && pwd )"
 
-echo "[*] Copying application files..."
-cp -R "$SRC_DIR/app" "$INSTALL_DIR/"
-cp -R "$SRC_DIR/static" "$INSTALL_DIR/"
-cp "$SRC_DIR/dashboard.html" "$INSTALL_DIR/"
-cp "$SRC_DIR/launch.py" "$INSTALL_DIR/"
-cp "$SRC_DIR/requirements.txt" "$INSTALL_DIR/"
-cp "$SRC_DIR/.env.example" "$INSTALL_DIR/" 2>/dev/null || true
-[ -f "$SRC_DIR/Modelfile" ] && cp "$SRC_DIR/Modelfile" "$INSTALL_DIR/"
+if [ ! -d "$SRC_DIR/app" ]; then
+    echo "[*] Standalone web runner detected. Fetching latest Nova Console from GitHub..."
+    TMP_DIR=$(mktemp -d)
+    curl -fsSL https://github.com/ad4rshp/nova-console/archive/refs/heads/main.tar.gz | tar -xz -C "$TMP_DIR"
+    cp -R "$TMP_DIR/nova-console-main/"* "$INSTALL_DIR/"
+    rm -rf "$TMP_DIR"
+else
+    echo "[*] Copying application files..."
+    cp -R "$SRC_DIR/app" "$INSTALL_DIR/"
+    cp -R "$SRC_DIR/static" "$INSTALL_DIR/"
+    cp "$SRC_DIR/dashboard.html" "$INSTALL_DIR/"
+    cp "$SRC_DIR/launch.py" "$INSTALL_DIR/"
+    cp "$SRC_DIR/requirements.txt" "$INSTALL_DIR/"
+    cp "$SRC_DIR/.env.example" "$INSTALL_DIR/" 2>/dev/null || true
+    [ -f "$SRC_DIR/Modelfile" ] && cp "$SRC_DIR/Modelfile" "$INSTALL_DIR/"
+fi
 
 cd "$INSTALL_DIR"
 
@@ -74,4 +82,5 @@ echo "  Run anywhere via: nova-console"
 echo "========================================================"
 echo ""
 "$BIN_DIR/nova-console"
+
 

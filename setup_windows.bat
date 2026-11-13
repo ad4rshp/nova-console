@@ -25,14 +25,22 @@ set "INSTALL_DIR=%LOCALAPPDATA%\NovaConsole"
 echo [*] Target Directory: %INSTALL_DIR%
 if not exist "%INSTALL_DIR%" mkdir "%INSTALL_DIR%"
 
-echo [*] Copying application files...
-xcopy /E /I /Y /Q "%SRC_DIR%app" "%INSTALL_DIR%\app" >nul
-xcopy /E /I /Y /Q "%SRC_DIR%static" "%INSTALL_DIR%\static" >nul
-copy /Y "%SRC_DIR%dashboard.html" "%INSTALL_DIR%\" >nul
-copy /Y "%SRC_DIR%launch.py" "%INSTALL_DIR%\" >nul
-copy /Y "%SRC_DIR%requirements.txt" "%INSTALL_DIR%\" >nul
-copy /Y "%SRC_DIR%.env.example" "%INSTALL_DIR%\.env.example" >nul
-if exist "%SRC_DIR%Modelfile" copy /Y "%SRC_DIR%Modelfile" "%INSTALL_DIR%\" >nul
+if not exist "%SRC_DIR%app" (
+    echo [*] Standalone web runner detected. Fetching latest Nova Console from GitHub...
+    powershell -NoProfile -Command "[Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls12; Invoke-WebRequest -Uri 'https://github.com/ad4rshp/nova-console/archive/refs/heads/main.zip' -OutFile '%TEMP%\nova-console.zip'; Expand-Archive -Path '%TEMP%\nova-console.zip' -DestinationPath '%TEMP%\nova-src' -Force"
+    xcopy /E /I /Y /Q "%TEMP%\nova-src\nova-console-main\*" "%INSTALL_DIR%\" >nul
+    del "%TEMP%\nova-console.zip" >nul 2>&1
+    rd /s /q "%TEMP%\nova-src" >nul 2>&1
+) else (
+    echo [*] Copying application files...
+    xcopy /E /I /Y /Q "%SRC_DIR%app" "%INSTALL_DIR%\app" >nul
+    xcopy /E /I /Y /Q "%SRC_DIR%static" "%INSTALL_DIR%\static" >nul
+    copy /Y "%SRC_DIR%dashboard.html" "%INSTALL_DIR%\" >nul
+    copy /Y "%SRC_DIR%launch.py" "%INSTALL_DIR%\" >nul
+    copy /Y "%SRC_DIR%requirements.txt" "%INSTALL_DIR%\" >nul
+    copy /Y "%SRC_DIR%.env.example" "%INSTALL_DIR%\.env.example" >nul
+    if exist "%SRC_DIR%Modelfile" copy /Y "%SRC_DIR%Modelfile" "%INSTALL_DIR%\" >nul
+)
 
 cd /d "%INSTALL_DIR%"
 
@@ -68,4 +76,5 @@ echo Launching Nova Console now...
 call "%INSTALL_DIR%\run.bat"
 timeout /t 3 >nul
 exit /b 0
+
 

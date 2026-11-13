@@ -30,22 +30,31 @@ We understand that modern developers and AI enthusiasts are rightly cautious of 
 
 ---
 
-## ⚡ Super Easy Installation (Quick Start)
+## ⚡ Direct Download & 1-Click Installers
 
-You only need **Python 3.10+** and any local AI engine (like Ollama or LM Studio) running on your computer.
+Choose the easiest way to install and run Nova Console on your computer:
 
-### Windows (1-Click Install or Run)
-- **Instant Portable Run**: Double-click **`Start Nova Console.bat`** to run directly from this folder.
-- **System Installer Setup**: Double-click **`setup_windows.bat`**. It automatically:
-  1. Installs Nova Console cleanly into `%LocalAppData%\NovaConsole`
-  2. Sets up an isolated Python environment
-  3. Creates a **Desktop Shortcut** and **Start Menu entry**
-  4. Launches Nova Console automatically
+| Platform | Direct Download | 1-Line Web Runner (No Git Required) |
+| :--- | :--- | :--- |
+| **Windows** | ⬇️ **[Download `setup_windows.bat`](https://raw.githubusercontent.com/ad4rshp/nova-console/main/setup_windows.bat)** | `irm https://raw.githubusercontent.com/ad4rshp/nova-console/main/setup_windows.bat -OutFile setup.bat; .\setup.bat` |
+| **macOS / Linux** | ⬇️ **[Download `setup_unix.sh`](https://raw.githubusercontent.com/ad4rshp/nova-console/main/setup_unix.sh)** | `curl -fsSL https://raw.githubusercontent.com/ad4rshp/nova-console/main/setup_unix.sh \| bash` |
+| **Standalone .exe** | 📦 **[Latest GitHub Releases](https://github.com/ad4rshp/nova-console/releases/latest)** | Zero Python required · Download &amp; double-click. |
 
-### macOS & Linux (1-Click Install or Run)
-- **Instant Portable Run**: `./start.sh`
-- **System Installer Setup**: `./setup_unix.sh`
-  *(Installs to `~/.local/share/nova-console`, adds a `nova-console` command to your PATH, and creates a desktop app launcher)*
+---
+
+### How the 1-Click Installers Work:
+- **Windows**:
+  - Run `setup_windows.bat` directly or paste the PowerShell 1-liner above.
+  - Automatically installs Nova Console cleanly into `%LocalAppData%\NovaConsole`.
+  - Creates a **Desktop Shortcut** (`Nova Console.lnk`) and **Start Menu entry**.
+  - Launches Nova Console and starts your local inference engine if not running.
+- **macOS & Linux**:
+  - Run `setup_unix.sh` or paste the `curl | bash` 1-liner above.
+  - Installs to `~/.local/share/nova-console`.
+  - Creates a global `nova-console` command in `~/.local/bin/` so you can launch it anytime from any terminal.
+- **Portable / No Installation**:
+  - Windows: Double-click **`Start Nova Console.bat`** to run directly from the folder.
+  - macOS / Linux: Run **`./start.sh`**.
 
 ### Standalone Executable (.exe / Binary)
 To build a single standalone binary with zero Python dependencies required for end-users:
