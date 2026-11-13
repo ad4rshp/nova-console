@@ -46,15 +46,16 @@ if not exist "%SRC_DIR%app" (
 
 cd /d "%INSTALL_DIR%"
 
-:: 2. Create isolated venv
-if not exist "%INSTALL_DIR%\.venv" (
+:: 2. Check and setup isolated venv
+if exist "%INSTALL_DIR%\.venv\Scripts\python.exe" (
+    echo [*] Virtual environment verified (.venv already exists, skipping re-creation).
+) else (
     echo [*] Creating isolated virtual environment...
-    python -m venv .venv
+    python -m venv "%INSTALL_DIR%\.venv"
+    echo [*] Installing requirements...
+    "%INSTALL_DIR%\.venv\Scripts\python.exe" -m pip install --quiet --upgrade pip
+    "%INSTALL_DIR%\.venv\Scripts\python.exe" -m pip install --quiet -r "%INSTALL_DIR%\requirements.txt"
 )
-
-echo [*] Installing requirements...
-"%INSTALL_DIR%\.venv\Scripts\python.exe" -m pip install --quiet --upgrade pip
-"%INSTALL_DIR%\.venv\Scripts\python.exe" -m pip install --quiet -r requirements.txt
 
 :: 3. Create Windows Launcher script in install directory
 echo @echo off > "%INSTALL_DIR%\run.bat"

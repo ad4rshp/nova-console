@@ -38,14 +38,16 @@ fi
 
 cd "$INSTALL_DIR"
 
-if [ ! -d ".venv" ]; then
+# 2. Check and setup isolated venv
+if [ -f "$INSTALL_DIR/.venv/bin/python3" ]; then
+    echo "[*] Virtual environment verified (.venv already exists, skipping re-creation)."
+else
     echo "[*] Creating virtual environment..."
-    python3 -m venv .venv
+    python3 -m venv "$INSTALL_DIR/.venv"
+    echo "[*] Installing dependencies..."
+    "$INSTALL_DIR/.venv/bin/pip" install --quiet --upgrade pip
+    "$INSTALL_DIR/.venv/bin/pip" install --quiet -r "$INSTALL_DIR/requirements.txt"
 fi
-
-echo "[*] Installing dependencies..."
-"$INSTALL_DIR/.venv/bin/pip" install --quiet --upgrade pip
-"$INSTALL_DIR/.venv/bin/pip" install --quiet -r requirements.txt
 
 # Create runner script in ~/.local/bin/nova-console
 cat << 'EOF' > "$BIN_DIR/nova-console"

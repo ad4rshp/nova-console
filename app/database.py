@@ -27,13 +27,14 @@ def init_db() -> None:
         cursor.execute("""
             CREATE TABLE IF NOT EXISTS request_history (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
-                timestamp DATETIME DEFAULT CURRENT_TIMESTAMP,
-                time_str TEXT NOT NULL,
+                timestamp REAL DEFAULT 0,
+                iso_time TEXT DEFAULT '',
                 endpoint TEXT NOT NULL,
                 model TEXT NOT NULL,
                 prompt_tokens INTEGER DEFAULT 0,
-                output_tokens INTEGER DEFAULT 0,
-                latency_s REAL DEFAULT 0.0,
+                completion_tokens INTEGER DEFAULT 0,
+                total_tokens INTEGER DEFAULT 0,
+                latency_ms REAL DEFAULT 0.0,
                 tps REAL DEFAULT 0.0,
                 status_code INTEGER DEFAULT 200
             );
@@ -41,16 +42,48 @@ def init_db() -> None:
         cursor.execute("CREATE INDEX IF NOT EXISTS idx_req_timestamp ON request_history(timestamp);")
         cursor.execute("CREATE INDEX IF NOT EXISTS idx_req_model ON request_history(model);")
 
+        # Migrations: ensure request_history columns match active queries
+        cursor.execute("PRAGMA table_info(request_history);")
+        req_cols = {row["name"] for row in cursor.fetchall()}
+        if "completion_tokens" not in req_cols:
+            cursor.execute("ALTER TABLE request_history ADD COLUMN completion_tokens INTEGER DEFAULT 0;")
+            if "output_tokens" in req_cols:
+                cursor.execute("UPDATE request_history SET completion_tokens = output_tokens WHERE completion_tokens = 0;")
+        if "iso_time" not in req_cols:
+            cursor.execute("ALTER TABLE request_history ADD COLUMN iso_time TEXT DEFAULT '';")
+        if "total_tokens" not in req_cols:
+            cursor.execute("ALTER TABLE request_history ADD COLUMN total_tokens INTEGER DEFAULT 0;")
+        if "latency_ms" not in req_cols:
+            cursor.execute("ALTER TABLE request_history ADD COLUMN latency_ms REAL DEFAULT 0.0;")
+
         # 3. Modelfile History Table
         cursor.execute("""
             CREATE TABLE IF NOT EXISTS modelfile_history (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
-                timestamp DATETIME DEFAULT CURRENT_TIMESTAMP,
-                system_prompt TEXT,
-                parameters_json TEXT,
+                timestamp REAL DEFAULT 0,
+                iso_time TEXT DEFAULT '',
+                content TEXT DEFAULT '',
+                system_prompt TEXT DEFAULT '',
+                parameters_json TEXT DEFAULT '{}',
                 applied_to_ollama INTEGER DEFAULT 0
             );
         """)
+
+        # Migrations: ensure modelfile_history columns exist
+        cursor.execute("PRAGMA table_info(modelfile_history);")
+        mf_cols = {row["name"] for row in cursor.fetchall()}
+        for col_name, col_def in [
+            ("iso_time", "TEXT DEFAULT ''"),
+            ("content", "TEXT DEFAULT ''"),
+            ("system_prompt", "TEXT DEFAULT ''"),
+            ("parameters_json", "TEXT DEFAULT '{}'"),
+            ("applied_to_ollama", "INTEGER DEFAULT 0"),
+        ]:
+            if col_name not in mf_cols:
+                try:
+                    cursor.execute(f"ALTER TABLE modelfile_history ADD COLUMN {col_name} {col_def};")
+                except Exception:
+                    pass
 
         # 4. Optional Chat History Table
         cursor.execute("""

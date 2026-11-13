@@ -355,9 +355,17 @@
           input.addEventListener('input', detectActivePreset);
         }
       });
+    } else {
+      // Sync parameters from backend if not currently being edited
+      PARAM_KEYS.forEach(key => {
+        const input = document.querySelector('#input_' + key);
+        if (input && !input.matches(':focus') && params[key] !== undefined) {
+          input.value = params[key];
+        }
+      });
     }
 
-    // Auto-detect preset on initial render
+    // Auto-detect preset on render
     detectActivePreset();
   }
 

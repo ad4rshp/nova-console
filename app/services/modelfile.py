@@ -85,11 +85,13 @@ def update_modelfile(values: dict[str, Any]) -> dict[str, Any]:
 
     MODELFILE_PATH.write_text(text, encoding="utf-8")
     mf = read_modelfile()
+    now = time.time()
+    iso_time = time.strftime("%Y-%m-%d %H:%M:%S")
     with get_db() as conn:
         conn.execute("""
-            INSERT INTO modelfile_history (system_prompt, parameters_json, applied_to_ollama)
-            VALUES (?, ?, 0)
-        """, (mf["system_prompt"], json.dumps(mf["parameters"])))
+            INSERT INTO modelfile_history (timestamp, iso_time, content, system_prompt, parameters_json, applied_to_ollama)
+            VALUES (?, ?, ?, ?, ?, 0)
+        """, (now, iso_time, mf.get("text", ""), mf["system_prompt"], json.dumps(mf["parameters"])))
         conn.commit()
     return mf
 
