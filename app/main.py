@@ -10,7 +10,7 @@ from fastapi import FastAPI, Request, Response, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import HTMLResponse, StreamingResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, ConfigDict
 from starlette.middleware.base import BaseHTTPMiddleware
 
 from app.config import (
@@ -43,6 +43,8 @@ from app.database import (
 from app.services.hardware import get_ram_stats, get_gpu_stats, get_storage_stats
 from app.services.modelfile import read_modelfile, update_modelfile, rebuild_nova_model, evict_model_vram
 from app.services.llm_engine import get_dashboard_state
+from app.services.providers import get_provider
+from app.services.rate_limiter import global_rate_limiter
 from app.services.terminal import (
     assess_command_risk,
     generate_approval_token,
@@ -152,11 +154,16 @@ if static_path.exists():
     app.mount("/static", StaticFiles(directory=str(static_path)), name="static")
 
 # --- Pydantic Schemas ---
+ALLOWED_SETTINGS = {"think", "save_chat_history", "preview_thinking", "theme", "auto_scroll"}
+
 class SettingsPayload(BaseModel):
     think: bool | None = None
     save_chat_history: bool | None = None
-    preview_thinking: str | None = None
-    theme: str | None = None
+    preview_thinking: str | None = Field(None, pattern=r"^(summary|full|hidden)$")
+    theme: str | None = Field(None, pattern=r"^(light|dark|system)$")
+    auto_scroll: bool | None = None
+
+    model_config = ConfigDict(extra="forbid")
 
 class ModelfilePayload(BaseModel):
     system_prompt: str | None = None
@@ -235,9 +242,11 @@ async def clear_chat_history():
     return {"ok": True, "message": "Chat history cleared."}
 
 @app.post("/api/settings")
-async def update_settings(payload: dict[str, Any]):
-    for k, v in payload.items():
-        db_set_setting(k, v)
+async def update_settings(payload: SettingsPayload):
+    updates = payload.model_dump(exclude_unset=True)
+    for k, v in updates.items():
+        if k in ALLOWED_SETTINGS:
+            db_set_setting(k, v)
     return db_get_settings()
 
 @app.post("/api/modelfile")
@@ -317,63 +326,42 @@ async def dashboard_chat(request: Request):
     if messages and messages[-1].get("role") == "user":
         db_save_chat_message("user", messages[-1].get("content", ""), "", model, images=valid_images)
 
+    provider = get_provider()
+
     async def stream_generator() -> AsyncGenerator[str, None]:
         start_time = time.perf_counter()
         full_content = ""
         full_thinking = ""
         prompt_tokens = 0
         output_tokens = 0
+        token_source = "estimated"
 
-        ollama_req = {
-            "model": model,
-            "messages": messages,
-            "stream": True,
-            "think": think
-        }
+        try:
+            async for chunk in provider.chat(messages, model=model, stream=True, think=think):
+                # Standard NDJSON line expected by dashboard.js
+                yield json.dumps({
+                    "message": {
+                        "role": "assistant",
+                        "content": chunk.get("content", ""),
+                        "thinking": chunk.get("thinking", "")
+                    },
+                    "done": chunk.get("done", False)
+                }) + "\n"
 
-        async with httpx.AsyncClient(timeout=httpx.Timeout(180.0, connect=8.0)) as client:
-            try:
-                chat_url = f"{LLM_BACKEND_URL}/api/chat"
-                async with client.stream("POST", chat_url, json=ollama_req) as response:
-                    if response.status_code != 200:
-                        body_err = await response.aread()
-                        err_text = body_err.decode(errors="replace")
-                        try:
-                            err_parsed = json.loads(err_text).get("error", err_text)
-                        except Exception:
-                            err_parsed = err_text
-                        yield json.dumps({"error": f"Inference Engine (HTTP {response.status_code}): {err_parsed}"}) + "\n"
-                        return
+                if chunk.get("content"):
+                    full_content += chunk["content"]
+                if chunk.get("thinking"):
+                    full_thinking += chunk["thinking"]
+                if chunk.get("prompt_tokens") is not None:
+                    prompt_tokens = chunk["prompt_tokens"]
+                if chunk.get("completion_tokens") is not None:
+                    output_tokens = chunk["completion_tokens"]
+                if chunk.get("token_source") == "actual":
+                    token_source = "actual"
 
-                    async for chunk in response.aiter_lines():
-                        if not chunk.strip():
-                            continue
-                        yield chunk + "\n"
-                        try:
-                            data = json.loads(chunk)
-                            msg = data.get("message", {})
-                            if msg.get("content"):
-                                full_content += msg["content"]
-                            if msg.get("thinking"):
-                                full_thinking += msg["thinking"]
-                            if data.get("prompt_eval_count"):
-                                prompt_tokens = data["prompt_eval_count"]
-                            if data.get("eval_count"):
-                                output_tokens = data["eval_count"]
-                        except Exception:
-                            pass
-            except httpx.ConnectError:
-                err_msg = f"Cannot connect to Ollama at {LLM_BACKEND_URL}. Ensure Ollama is running ('ollama serve') or select an active model."
-                yield json.dumps({"error": err_msg}) + "\n"
-                return
-            except httpx.ConnectTimeout:
-                err_msg = f"Connection timed out reaching {LLM_BACKEND_URL}. Check if your inference engine is frozen or starting up."
-                yield json.dumps({"error": err_msg}) + "\n"
-                return
-            except Exception as exc:
-                err_json = json.dumps({"error": f"LLM streaming failed: {str(exc)}"})
-                yield f"{err_json}\n"
-                return
+        except Exception as exc:
+            yield json.dumps({"error": f"{provider.name} streaming failed: {str(exc)}"}) + "\n"
+            return
 
         duration = time.perf_counter() - start_time
         tps = round(output_tokens / duration, 1) if duration > 0 and output_tokens > 0 else 0.0
@@ -388,14 +376,37 @@ async def dashboard_chat(request: Request):
             completion_tokens=output_tokens or (len(full_content) // 4),
             latency_s=round(duration, 2),
             tps=tps,
-            status_code=200
+            status_code=200,
+            token_source=token_source
         )
 
     return StreamingResponse(stream_generator(), media_type="application/x-ndjson")
 
-# --- Universal OpenAI-Compatible API Proxy (/v1/) with Usage Tracking ---
+# --- Universal OpenAI-Compatible API Proxy (/v1/) with Usage Tracking & Security ---
 @app.api_route("/v1/{path:path}", methods=["GET", "POST", "PUT", "DELETE"])
 async def proxy_v1(path: str, request: Request):
+    client_ip = request.client.host if request.client else "127.0.0.1"
+
+    # 1. Rate Limiting Enforcement
+    allowed, remaining, retry_after = global_rate_limiter.check_rate_limit(client_ip)
+    if not allowed:
+        return JSONResponse(
+            status_code=429,
+            content={"error": "Rate limit exceeded. Too many requests."},
+            headers={"Retry-After": str(int(retry_after))}
+        )
+
+    # 2. Proxy Authentication Enforcement (Mandatory when LAN mode or auth requirement is active)
+    require_proxy_auth = NOVA_ALLOW_LAN or os.environ.get("NOVA_REQUIRE_AUTH", "0") in ("1", "true", "yes")
+    if require_proxy_auth:
+        auth_header = request.headers.get("Authorization", "")
+        token = auth_header[7:].strip() if auth_header.startswith("Bearer ") else request.headers.get("X-Nova-Auth", "")
+        if not verify_admin_token(token):
+            return JSONResponse(
+                status_code=401,
+                content={"error": "Unauthorized: API proxy access requires valid Authorization Bearer token when LAN mode is active."}
+            )
+
     target_url = f"{LLM_BACKEND_URL}/v1/{path}"
     headers = {
         k: v for k, v in request.headers.items()
@@ -416,22 +427,23 @@ async def proxy_v1(path: str, request: Request):
     model_name = req_json.get("model", "default")
     is_stream = bool(req_json.get("stream", False))
 
-    async with httpx.AsyncClient(timeout=httpx.Timeout(180.0, connect=10.0)) as client:
-        try:
-            req = client.build_request(
-                method=request.method,
-                url=target_url,
-                headers=headers,
-                content=body
-            )
-            response = await client.send(req, stream=is_stream)
+    client = httpx.AsyncClient(timeout=httpx.Timeout(180.0, connect=10.0))
+    try:
+        req = client.build_request(
+            method=request.method,
+            url=target_url,
+            headers=headers,
+            content=body
+        )
+        response = await client.send(req, stream=is_stream)
 
-            res_headers = {
-                k: v for k, v in response.headers.items()
-                if k.lower() not in HOP_BY_HOP_HEADERS
-            }
+        res_headers = {
+            k: v for k, v in response.headers.items()
+            if k.lower() not in HOP_BY_HOP_HEADERS
+        }
 
-            if not is_stream:
+        if not is_stream:
+            try:
                 content = await response.aread()
                 duration = time.perf_counter() - start_time
                 status_code = response.status_code
@@ -440,11 +452,14 @@ async def proxy_v1(path: str, request: Request):
                 if is_chat and status_code == 200:
                     prompt_tokens = 0
                     completion_tokens = 0
+                    has_actual_tokens = False
                     try:
                         res_json = json.loads(content)
                         usage = res_json.get("usage", {})
-                        prompt_tokens = usage.get("prompt_tokens", 0)
-                        completion_tokens = usage.get("completion_tokens", 0)
+                        if usage:
+                            prompt_tokens = usage.get("prompt_tokens", 0)
+                            completion_tokens = usage.get("completion_tokens", 0)
+                            has_actual_tokens = True
                     except Exception:
                         pass
 
@@ -454,6 +469,7 @@ async def proxy_v1(path: str, request: Request):
                         completion_tokens = len(content) // 4
 
                     tps = round(completion_tokens / duration, 1) if duration > 0 and completion_tokens > 0 else 0.0
+                    token_source = "actual" if has_actual_tokens else "estimated"
                     try:
                         db_record_request(
                             endpoint=f"/v1/{path}",
@@ -462,7 +478,8 @@ async def proxy_v1(path: str, request: Request):
                             completion_tokens=completion_tokens,
                             latency_s=round(duration, 2),
                             tps=tps,
-                            status_code=status_code
+                            status_code=status_code,
+                            token_source=token_source
                         )
                     except Exception:
                         pass
@@ -472,59 +489,69 @@ async def proxy_v1(path: str, request: Request):
                     status_code=status_code,
                     headers=res_headers
                 )
+            finally:
+                await response.aclose()
+                await client.aclose()
 
-            # Streaming response handling
-            prompt_tokens_est = len(str(req_json.get("messages", ""))) // 4 if "messages" in req_json else 0
+        # Streaming response handling with leak-free lifecycle cleanup
+        prompt_tokens_est = len(str(req_json.get("messages", ""))) // 4 if "messages" in req_json else 0
 
-            async def streaming_wrapper():
-                out_tokens = 0
-                exact_prompt_tokens = prompt_tokens_est
-                try:
-                    async for chunk in response.aiter_bytes():
-                        yield chunk
-                        chunk_str = chunk.decode("utf-8", errors="ignore")
-                        for line in chunk_str.split("\n"):
-                            line = line.strip()
-                            if line.startswith("data: ") and line != "data: [DONE]":
-                                try:
-                                    cdata = json.loads(line[6:])
-                                    if "usage" in cdata and cdata["usage"]:
-                                        exact_prompt_tokens = cdata["usage"].get("prompt_tokens", exact_prompt_tokens)
-                                        out_tokens = cdata["usage"].get("completion_tokens", out_tokens)
-                                    elif "choices" in cdata and cdata["choices"]:
-                                        delta = cdata["choices"][0].get("delta", {})
-                                        if delta.get("content"):
-                                            out_tokens += max(1, len(delta["content"]) // 4)
-                                except Exception:
-                                    pass
-                finally:
-                    await response.aclose()
-                    duration = time.perf_counter() - start_time
-                    tps = round(out_tokens / duration, 1) if duration > 0 and out_tokens > 0 else 0.0
-                    if is_chat:
-                        try:
-                            db_record_request(
-                                endpoint=f"/v1/{path}",
-                                model=model_name,
-                                prompt_tokens=exact_prompt_tokens,
-                                completion_tokens=out_tokens,
-                                latency_s=round(duration, 2),
-                                tps=tps,
-                                status_code=response.status_code
-                            )
-                        except Exception:
-                            pass
+        async def streaming_wrapper():
+            out_tokens = 0
+            exact_prompt_tokens = prompt_tokens_est
+            has_exact = False
+            try:
+                async for chunk in response.aiter_bytes():
+                    yield chunk
+                    chunk_str = chunk.decode("utf-8", errors="ignore")
+                    for line in chunk_str.split("\n"):
+                        line = line.strip()
+                        if line.startswith("data: ") and line != "data: [DONE]":
+                            try:
+                                cdata = json.loads(line[6:])
+                                if "usage" in cdata and cdata["usage"]:
+                                    exact_prompt_tokens = cdata["usage"].get("prompt_tokens", exact_prompt_tokens)
+                                    out_tokens = cdata["usage"].get("completion_tokens", out_tokens)
+                                    has_exact = True
+                                elif "choices" in cdata and cdata["choices"]:
+                                    delta = cdata["choices"][0].get("delta", {})
+                                    if delta.get("content"):
+                                        out_tokens += max(1, len(delta["content"]) // 4)
+                            except Exception:
+                                pass
+            finally:
+                # Guaranteed cleanup of upstream response and client on disconnect or completion
+                await response.aclose()
+                await client.aclose()
+                duration = time.perf_counter() - start_time
+                tps = round(out_tokens / duration, 1) if duration > 0 and out_tokens > 0 else 0.0
+                if is_chat:
+                    try:
+                        db_record_request(
+                            endpoint=f"/v1/{path}",
+                            model=model_name,
+                            prompt_tokens=exact_prompt_tokens,
+                            completion_tokens=out_tokens,
+                            latency_s=round(duration, 2),
+                            tps=tps,
+                            status_code=response.status_code,
+                            token_source="actual" if has_exact else "estimated"
+                        )
+                    except Exception:
+                        pass
 
-            return StreamingResponse(
-                streaming_wrapper(),
-                status_code=response.status_code,
-                headers=res_headers
-            )
+        return StreamingResponse(
+            streaming_wrapper(),
+            status_code=response.status_code,
+            headers=res_headers
+        )
 
-        except httpx.ConnectError:
-            return JSONResponse(
-                status_code=502,
-                content={"error": f"Bad Gateway: Unable to connect to inference backend at {LLM_BACKEND_URL}. Ensure your engine is running."}
-            )
-        except Exception as exc:
-            return JSONResponse(status_code=502, content={"error": f"LLM backend gateway error: {str(exc)}"})
+    except httpx.ConnectError:
+        await client.aclose()
+        return JSONResponse(
+            status_code=502,
+            content={"error": f"Bad Gateway: Unable to connect to inference backend at {LLM_BACKEND_URL}. Ensure your engine is running."}
+        )
+    except Exception as exc:
+        await client.aclose()
+        return JSONResponse(status_code=502, content={"error": f"LLM backend gateway error: {str(exc)}"})

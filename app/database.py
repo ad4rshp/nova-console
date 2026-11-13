@@ -44,7 +44,8 @@ def init_db() -> None:
                 total_tokens INTEGER DEFAULT 0,
                 latency_ms REAL DEFAULT 0.0,
                 tps REAL DEFAULT 0.0,
-                status_code INTEGER DEFAULT 200
+                status_code INTEGER DEFAULT 200,
+                token_source TEXT DEFAULT 'actual'
             );
         """)
         cursor.execute("CREATE INDEX IF NOT EXISTS idx_req_timestamp ON request_history(timestamp);")
@@ -63,6 +64,8 @@ def init_db() -> None:
             cursor.execute("ALTER TABLE request_history ADD COLUMN total_tokens INTEGER DEFAULT 0;")
         if "latency_ms" not in req_cols:
             cursor.execute("ALTER TABLE request_history ADD COLUMN latency_ms REAL DEFAULT 0.0;")
+        if "token_source" not in req_cols:
+            cursor.execute("ALTER TABLE request_history ADD COLUMN token_source TEXT DEFAULT 'actual';")
 
         # 3. Modelfile History Table
         cursor.execute("""
@@ -173,13 +176,22 @@ def db_set_setting(key: str, value: Any) -> None:
         """, (key, val_str))
         conn.commit()
 
-def db_record_request(endpoint: str, model: str, prompt_tokens: int, completion_tokens: int, latency_s: float, tps: float, status_code: int = 200) -> None:
+def db_record_request(
+    endpoint: str,
+    model: str,
+    prompt_tokens: int,
+    completion_tokens: int,
+    latency_s: float,
+    tps: float,
+    status_code: int = 200,
+    token_source: str = "actual"
+) -> None:
     now = time.time()
     iso_time = time.strftime("%Y-%m-%d %H:%M:%S")
     with get_db() as conn:
         conn.execute("""
-            INSERT INTO request_history (timestamp, iso_time, endpoint, model, prompt_tokens, completion_tokens, total_tokens, latency_ms, tps, status_code)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            INSERT INTO request_history (timestamp, iso_time, endpoint, model, prompt_tokens, completion_tokens, total_tokens, latency_ms, tps, status_code, token_source)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
         """, (
             now,
             iso_time,
@@ -190,7 +202,8 @@ def db_record_request(endpoint: str, model: str, prompt_tokens: int, completion_
             prompt_tokens + completion_tokens,
             round(latency_s * 1000, 2),
             tps,
-            status_code
+            status_code,
+            token_source
         ))
         conn.commit()
 
@@ -198,7 +211,7 @@ def db_get_recent_requests(limit: int = 100) -> list[dict[str, Any]]:
     with get_db() as conn:
         rows = conn.execute("""
             SELECT iso_time as time, endpoint as path, model, prompt_tokens, completion_tokens as output_tokens,
-                   ROUND(latency_ms / 1000.0, 2) as latency_s, tps, status_code
+                   ROUND(latency_ms / 1000.0, 2) as latency_s, tps, status_code, token_source
             FROM request_history
             ORDER BY timestamp DESC
             LIMIT ?
@@ -227,6 +240,14 @@ def db_get_usage_metrics() -> dict[str, Any]:
         rec_tps_list = [r["tps"] for r in recent_rows if r["tps"] and r["tps"] > 0]
         rec_tps = round(sum(rec_tps_list) / len(rec_tps_list), 1) if rec_tps_list else 0
 
+        # Exact vs estimated tokens breakdown
+        actual_tokens = conn.execute("""
+            SELECT COALESCE(SUM(total_tokens), 0) FROM request_history WHERE token_source = 'actual'
+        """).fetchone()[0]
+        estimated_tokens = conn.execute("""
+            SELECT COALESCE(SUM(total_tokens), 0) FROM request_history WHERE token_source = 'estimated'
+        """).fetchone()[0]
+
         return {
             "requests": agg["req_count"],
             "prompt_tokens": agg["total_prompt"],
@@ -234,6 +255,10 @@ def db_get_usage_metrics() -> dict[str, Any]:
             "average_latency_s": rec_lat or round(agg["avg_lat"], 2),
             "avg_tps": rec_tps,
             "by_model": by_model,
+            "tokens_breakdown": {
+                "actual": actual_tokens,
+                "estimated": estimated_tokens
+            }
         }
 
 def db_get_usage_summary() -> dict[str, Any]:

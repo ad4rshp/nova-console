@@ -235,6 +235,43 @@ def run_system_command(
             "working_dir": str(target_dir)
         }
 
+    # Defense in depth: Disable terminal execution by default for network-exposed LAN deployments
+    from app.config import NOVA_ALLOW_LAN
+    is_lan_terminal_enabled = os.environ.get("NOVA_ENABLE_TERMINAL_LAN", "0").lower() in ("1", "true", "yes")
+    if NOVA_ALLOW_LAN and not is_lan_terminal_enabled:
+        return {
+            "ok": False,
+            "error": "Terminal execution is disabled by default on network-exposed deployments (NOVA_ALLOW_LAN=1). Set NOVA_ENABLE_TERMINAL_LAN=1 to explicitly permit terminal commands over LAN.",
+            "return_code": 403,
+            "output": "",
+            "working_dir": str(target_dir)
+        }
+
+    # Configurable command allowlist enforcement
+    allowlist_env = os.environ.get("NOVA_COMMAND_ALLOWLIST", "").strip()
+    strict_allowlist = os.environ.get("NOVA_STRICT_ALLOWLIST", "0").lower() in ("1", "true", "yes") or bool(allowlist_env)
+    if strict_allowlist:
+        allowed_bins = [b.strip().lower() for b in allowlist_env.split(",") if b.strip()] if allowlist_env else [
+            "python", "python3", "pip", "pip3", "pytest", "git", "dir", "ls", "echo", "type", "cat", "node", "npm", "whoami", "hostname"
+        ]
+        import shlex
+        try:
+            tokens = shlex.split(cmd_clean, posix=(platform.system() != "Windows"))
+            base_cmd = Path(tokens[0]).name.lower() if tokens else ""
+            if base_cmd.endswith(".exe"):
+                base_cmd = base_cmd[:-4]
+        except Exception:
+            base_cmd = cmd_clean.split()[0].lower() if cmd_clean.split() else ""
+
+        if base_cmd not in allowed_bins:
+            return {
+                "ok": False,
+                "error": f"Execution blocked: Command '{base_cmd}' is not in the approved command allowlist.",
+                "return_code": 403,
+                "output": "",
+                "working_dir": str(target_dir)
+            }
+
     # 1. Enforce Server-Side User Authorization
     from app.services.auth import verify_admin_token
     if not verify_admin_token(user_authorization):
@@ -271,6 +308,14 @@ def run_system_command(
     start_time = time.perf_counter()
     is_windows = platform.system() == "Windows"
 
+    # Restricted environment: prevent subprocess from inheriting host secrets
+    safe_env = os.environ.copy()
+    for sensitive_key in [
+        "NOVA_ADMIN_KEY", "NOVA_API_KEY", "OPENAI_API_KEY", "AWS_SECRET_ACCESS_KEY",
+        "GITHUB_TOKEN", "TOKEN", "PASSWORD", "SECRET"
+    ]:
+        safe_env.pop(sensitive_key, None)
+
     proc = None
     try:
         if is_windows:
@@ -280,6 +325,7 @@ def run_system_command(
                 stdout=subprocess.PIPE,
                 stderr=subprocess.PIPE,
                 text=True,
+                env=safe_env,
                 creationflags=subprocess.CREATE_NEW_PROCESS_GROUP
             )
         else:
@@ -290,6 +336,7 @@ def run_system_command(
                 stdout=subprocess.PIPE,
                 stderr=subprocess.PIPE,
                 text=True,
+                env=safe_env,
                 preexec_fn=os.setsid
             )
 

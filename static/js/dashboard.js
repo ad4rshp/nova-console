@@ -180,8 +180,10 @@
         const totalMb = parseFloat(g.total_mb || 1);
         const vramPct = Math.round((usedMb / totalMb) * 100);
         document.querySelector('#gpuVal').textContent = `${fmt(usedMb)} MB`;
-        document.querySelector('#gpuSub').textContent = `${fmt(totalMb)} MB total`;
+        const catLabel = g.memory_category === 'unified_memory' ? 'Unified Memory' : (g.memory_category === 'system_ram_shared' ? 'Shared Host RAM' : 'Dedicated VRAM');
+        document.querySelector('#gpuSub').textContent = `${fmt(totalMb)} MB (${catLabel})`;
         document.querySelector('#gpuTag').textContent = g.name ? g.name.replace('NVIDIA GeForce ', '') : 'GPU';
+        document.querySelector('#gpuTag').title = g.memory_description || catLabel;
         const gpuGauge = document.querySelector('#gpuGauge');
         gpuGauge.setAttribute('stroke-dasharray', `${vramPct}, 100`);
         gpuGauge.setAttribute('stroke', vramPct > 85 ? 'var(--bad)' : vramPct > 70 ? 'var(--warn)' : 'var(--accent-blue)');
@@ -551,17 +553,23 @@
     // Show 4 recent rows by default, or all if expanded
     const visibleRows = isHistoryExpanded ? reversed : reversed.slice(0, 4);
 
-    body.innerHTML = visibleRows.map(row => `
+    body.innerHTML = visibleRows.map(row => {
+      const isActual = row.token_source === 'actual';
+      const tokenBadge = isActual
+        ? '<span title="Actual provider-reported tokens" style="display:inline-block;margin-left:4px;font-size:10px;padding:1px 5px;border-radius:4px;background:rgba(16,185,129,0.12);color:#10b981;font-weight:600;">exact</span>'
+        : '<span title="Estimated from character length" style="display:inline-block;margin-left:4px;font-size:10px;padding:1px 5px;border-radius:4px;background:rgba(245,158,11,0.12);color:#f59e0b;font-weight:500;">est</span>';
+      return `
       <tr>
         <td style="color:var(--ink-muted);font-family:ui-monospace,monospace;font-size:11.5px;">${row.time}</td>
         <td><strong>${row.model || 'unknown'}</strong></td>
         <td><span class="tag-neu">${row.path || '/v1'}</span></td>
         <td>${fmt(row.prompt_tokens)}</td>
-        <td>${fmt(row.output_tokens)}</td>
+        <td>${fmt(row.output_tokens)} ${tokenBadge}</td>
         <td>${row.latency_s}s</td>
         <td><strong style="color:var(--ink);">${row.tps ? row.tps + ' tps' : '—'}</strong></td>
       </tr>
-    `).join('');
+      `;
+    }).join('');
 
     if (reversed.length > 4) {
       if (viewMoreWrap) viewMoreWrap.style.display = 'block';

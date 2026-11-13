@@ -248,4 +248,47 @@ def test_lan_mode_sensitive_routes_require_authentication(client, monkeypatch):
         res_with_auth = client.request(method, path, json=payload, headers={"X-Nova-Auth": admin_token})
         assert res_with_auth.status_code != 401, f"Expected non-401 for {path} with valid auth header"
 
+def test_terminal_lan_auto_disable(monkeypatch):
+    """Ensure terminal execution is disabled by default on LAN-exposed instances."""
+    from app.services.auth import get_or_create_admin_token
+    admin_token = get_or_create_admin_token()
+
+    # Simulate LAN mode enabled, but terminal LAN opt-in NOT enabled
+    monkeypatch.setattr("app.config.NOVA_ALLOW_LAN", True)
+    monkeypatch.delenv("NOVA_ENABLE_TERMINAL_LAN", raising=False)
+
+    token_data = generate_approval_token("echo lan_test")
+    res = run_system_command("echo lan_test", approval_token=token_data["approval_token"], user_authorization=admin_token)
+    assert res["ok"] is False
+    assert res["return_code"] == 403
+    assert "disabled by default on network-exposed" in res["error"]
+
+    # When explicitly opted in via NOVA_ENABLE_TERMINAL_LAN=1, execution proceeds
+    monkeypatch.setenv("NOVA_ENABLE_TERMINAL_LAN", "1")
+    token_data2 = generate_approval_token("echo lan_test_opted_in")
+    res2 = run_system_command("echo lan_test_opted_in", approval_token=token_data2["approval_token"], user_authorization=admin_token)
+    assert res2["ok"] is True
+
+def test_terminal_command_allowlist(monkeypatch):
+    """Ensure configurable command allowlists block non-approved binaries."""
+    from app.services.auth import get_or_create_admin_token
+    admin_token = get_or_create_admin_token()
+
+    # Configure strict allowlist permitting only 'python' and 'echo'
+    monkeypatch.setenv("NOVA_STRICT_ALLOWLIST", "1")
+    monkeypatch.setenv("NOVA_COMMAND_ALLOWLIST", "python,echo")
+
+    # 1. Allowed command succeeds
+    t_allowed = generate_approval_token("echo allowed_command")
+    res_allowed = run_system_command("echo allowed_command", approval_token=t_allowed["approval_token"], user_authorization=admin_token)
+    assert res_allowed["ok"] is True
+
+    # 2. Non-allowlisted command is blocked with 403
+    t_blocked = generate_approval_token("whoami")
+    res_blocked = run_system_command("whoami", approval_token=t_blocked["approval_token"], user_authorization=admin_token)
+    assert res_blocked["ok"] is False
+    assert res_blocked["return_code"] == 403
+    assert "not in the approved command allowlist" in res_blocked["error"]
+
+
 

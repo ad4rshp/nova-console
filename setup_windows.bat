@@ -41,6 +41,7 @@ if not exist "%SRC_DIR%app" (
     xcopy /E /I /Y /Q "%SRC_DIR%static" "%INSTALL_DIR%\static" >nul
     copy /Y "%SRC_DIR%launch.py" "%INSTALL_DIR%\" >nul
     copy /Y "%SRC_DIR%requirements.txt" "%INSTALL_DIR%\" >nul
+    if exist "%SRC_DIR%requirements.lock" copy /Y "%SRC_DIR%requirements.lock" "%INSTALL_DIR%\" >nul
     copy /Y "%SRC_DIR%.env.example" "%INSTALL_DIR%\.env.example" >nul
 )
 
@@ -54,7 +55,11 @@ if exist "%INSTALL_DIR%\.venv\Scripts\python.exe" (
     python -m venv "%INSTALL_DIR%\.venv"
     echo [*] Installing requirements...
     "%INSTALL_DIR%\.venv\Scripts\python.exe" -m pip install --quiet --upgrade pip
-    "%INSTALL_DIR%\.venv\Scripts\python.exe" -m pip install --quiet -r "%INSTALL_DIR%\requirements.txt"
+    if exist "%INSTALL_DIR%\requirements.lock" (
+        "%INSTALL_DIR%\.venv\Scripts\python.exe" -m pip install --quiet -r "%INSTALL_DIR%\requirements.lock"
+    ) else (
+        "%INSTALL_DIR%\.venv\Scripts\python.exe" -m pip install --quiet -r "%INSTALL_DIR%\requirements.txt"
+    )
 )
 
 :: 3. Create Windows Launcher script in install directory

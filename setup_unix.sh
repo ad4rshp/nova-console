@@ -33,6 +33,7 @@ else
     cp -R "$SRC_DIR/static" "$INSTALL_DIR/"
     cp "$SRC_DIR/launch.py" "$INSTALL_DIR/"
     cp "$SRC_DIR/requirements.txt" "$INSTALL_DIR/"
+    cp "$SRC_DIR/requirements.lock" "$INSTALL_DIR/" 2>/dev/null || true
     cp "$SRC_DIR/.env.example" "$INSTALL_DIR/" 2>/dev/null || true
 fi
 
@@ -46,7 +47,11 @@ else
     python3 -m venv "$INSTALL_DIR/.venv"
     echo "[*] Installing dependencies..."
     "$INSTALL_DIR/.venv/bin/pip" install --quiet --upgrade pip
-    "$INSTALL_DIR/.venv/bin/pip" install --quiet -r "$INSTALL_DIR/requirements.txt"
+    if [ -f "$INSTALL_DIR/requirements.lock" ]; then
+        "$INSTALL_DIR/.venv/bin/pip" install --quiet -r "$INSTALL_DIR/requirements.lock"
+    else
+        "$INSTALL_DIR/.venv/bin/pip" install --quiet -r "$INSTALL_DIR/requirements.txt"
+    fi
 fi
 
 # Create runner script in ~/.local/bin/nova-console

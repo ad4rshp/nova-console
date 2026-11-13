@@ -104,6 +104,9 @@ def get_gpu_stats() -> dict[str, Any]:
                             "utilization": parts[3],
                             "vram_percent": pct,
                             "gpu_count": len(lines),
+                            "memory_category": "dedicated_vram",
+                            "is_dedicated_vram": True,
+                            "memory_description": "Dedicated GPU VRAM",
                             "status": "active"
                         }
         except Exception:
@@ -128,6 +131,9 @@ def get_gpu_stats() -> dict[str, Any]:
                     "utilization": str(ram["percent"]),
                     "vram_percent": ram["percent"],
                     "unified_memory": True,
+                    "memory_category": "unified_memory",
+                    "is_dedicated_vram": False,
+                    "memory_description": "Apple Unified System Memory (Shared across CPU/GPU)",
                     "status": "active"
                 }
         except Exception:
@@ -161,6 +167,9 @@ def get_gpu_stats() -> dict[str, Any]:
                     "total_mb": total_mb or "N/A",
                     "utilization": str(pct) if pct is not None else "N/A",
                     "vram_percent": pct if pct is not None else 0,
+                    "memory_category": "dedicated_vram",
+                    "is_dedicated_vram": True,
+                    "memory_description": "Dedicated GPU VRAM",
                     "status": "active" if total_mb else "unavailable"
                 }
         except Exception:
@@ -178,6 +187,9 @@ def get_gpu_stats() -> dict[str, Any]:
             "utilization": str(ram["percent"]),
             "vram_percent": ram["percent"],
             "is_cpu_mode": True,
+            "memory_category": "system_ram_shared",
+            "is_dedicated_vram": False,
+            "memory_description": "Shared Host System RAM (No Dedicated GPU)",
             "status": "active"
         }
 
@@ -189,6 +201,9 @@ def get_gpu_stats() -> dict[str, Any]:
         "utilization": "N/A",
         "vram_percent": 0,
         "is_cpu_mode": True,
+        "memory_category": "system_ram_shared",
+        "is_dedicated_vram": False,
+        "memory_description": "Shared Host System RAM (Unavailable)",
         "status": "unavailable"
     }
 

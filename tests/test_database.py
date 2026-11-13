@@ -182,3 +182,43 @@ def test_database_migrations_idempotency(tmp_path, monkeypatch):
     assert "risk_level" in audit_cols
 
     migrated_conn.close()
+
+def test_token_source_tracking_actual_vs_estimated():
+    """Ensure exact provider-reported tokens and character-estimated tokens are recorded distinctly."""
+    # Record one actual and one estimated request
+    db_record_request(
+        endpoint="/v1/chat/completions",
+        model="test-exact-model",
+        prompt_tokens=100,
+        completion_tokens=50,
+        latency_s=1.0,
+        tps=50.0,
+        status_code=200,
+        token_source="actual"
+    )
+    db_record_request(
+        endpoint="/v1/chat/completions",
+        model="test-est-model",
+        prompt_tokens=200,
+        completion_tokens=80,
+        latency_s=1.5,
+        tps=53.3,
+        status_code=200,
+        token_source="estimated"
+    )
+
+    recent = db_get_recent_requests(10)
+    exact_req = next((r for r in recent if r["model"] == "test-exact-model"), None)
+    est_req = next((r for r in recent if r["model"] == "test-est-model"), None)
+
+    assert exact_req is not None
+    assert exact_req["token_source"] == "actual"
+
+    assert est_req is not None
+    assert est_req["token_source"] == "estimated"
+
+    metrics = db_get_usage_metrics()
+    assert "tokens_breakdown" in metrics
+    assert metrics["tokens_breakdown"]["actual"] >= 150
+    assert metrics["tokens_breakdown"]["estimated"] >= 280
+
