@@ -1,0 +1,599 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Nova Console</title>
+  <script>
+    (function() {
+      const saved = localStorage.getItem('nova_theme');
+      if (saved === 'dark' || (!saved && window.matchMedia && window.matchMedia('(prefers-color-scheme: dark)').matches)) {
+        document.documentElement.setAttribute('data-theme', 'dark');
+      } else {
+        document.documentElement.setAttribute('data-theme', 'light');
+      }
+    })();
+  </script>
+  <!-- Modern Google Fonts: Inter & JetBrains Mono -->
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&family=JetBrains+Mono:wght@400;500;600;700&display=swap" rel="stylesheet">
+  <link rel="stylesheet" href="/static/css/dashboard.css">
+</head>
+<body>
+
+<main>
+  <!-- Header -->
+  <header class="header">
+    <div class="brand">
+      <div class="brand-icon">
+        <svg class="icon brand-svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="width:24px;height:24px;">
+          <circle cx="12" cy="12" r="3" fill="currentColor" fill-opacity="0.85"/>
+          <path d="M12 2v3M12 19v3M2 12h3M19 12h3"/>
+          <path d="M18.36 5.64l-2.12 2.12M7.76 16.24l-2.12 2.12M5.64 5.64l2.12 2.12M16.24 16.24l2.12 2.12" opacity="0.6"/>
+          <circle cx="12" cy="12" r="7" stroke-dasharray="2 3" opacity="0.75"/>
+        </svg>
+      </div>
+      <div>
+        <h1 class="brand-title">Nova Console</h1>
+        <p class="brand-desc">Local AI Workstation &amp; Proxy</p>
+      </div>
+    </div>
+    <div class="header-actions">
+      <!-- Release Update Notifier Pill (0 MB background RAM) -->
+      <a id="updatePill" class="neu-pill update-badge" style="display:none; text-decoration:none; cursor:pointer;" target="_blank" rel="noopener" title="Click to view new release on GitHub">
+        <span class="dot" style="background:#3b82f6; box-shadow:0 0 8px rgba(59, 130, 246, 0.8);"></span>
+        <span id="updatePillText">Update Available</span>
+      </a>
+      <!-- Trust & Privacy Audit Badge -->
+      <button id="trustBadgeBtn" class="neu-pill" style="cursor:pointer; display:inline-flex; align-items:center; gap:5px; border:none;" onclick="openTrustModal()" title="View Open Source & Privacy Transparency Report">
+        <svg class="icon" viewBox="0 0 24 24" style="width:13px;height:13px;color:#10b981;"><path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z"/></svg>
+        <span style="font-size:11px; font-weight:600; color:var(--ink);">100% Localhost · 0 Telemetry</span>
+      </button>
+      <span id="statusPill" class="neu-pill">
+        <span class="dot"></span>
+        <span id="statusText">Connecting…</span>
+      </span>
+      <span id="proxyPill" class="neu-pill proxy" title="Click to copy proxy URL">
+        <svg class="icon" viewBox="0 0 24 24"><rect width="14" height="14" x="8" y="8" rx="2" ry="2"/><path d="M4 16c-1.1 0-2-.9-2-2V4c0-1.1.9-2 2-2h10c1.1 0 2 .9 2 2"/></svg>
+        http://127.0.0.1:8080/v1
+      </span>
+      <!-- Animated Theme Toggle Button -->
+      <button id="themeToggleBtn" class="theme-toggle-btn" title="Switch Theme (Dark / Light)" aria-label="Toggle Dark Mode">
+        <div class="theme-icon-wrap">
+          <svg class="theme-icon sun-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+            <circle cx="12" cy="12" r="5"></circle>
+            <line x1="12" y1="1" x2="12" y2="3"></line>
+            <line x1="12" y1="21" x2="12" y2="23"></line>
+            <line x1="4.22" y1="4.22" x2="5.64" y2="5.64"></line>
+            <line x1="18.36" y1="18.36" x2="19.78" y2="19.78"></line>
+            <line x1="1" y1="12" x2="3" y2="12"></line>
+            <line x1="21" y1="12" x2="23" y2="12"></line>
+            <line x1="4.22" y1="19.78" x2="5.64" y2="18.36"></line>
+            <line x1="18.36" y1="5.64" x2="19.78" y2="4.22"></line>
+          </svg>
+          <svg class="theme-icon moon-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+            <path d="M21 12.79A9 9 0 1 1 11.21 3 7 7 0 0 0 21 12.79z"></path>
+          </svg>
+        </div>
+        <span id="themeToggleLabel">Dark</span>
+      </button>
+      <button id="headerChatBtn" class="btn btn-blue" title="Open Nova Chat">
+        <svg class="icon" viewBox="0 0 24 24"><path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"/></svg>
+        Chat with Nova
+      </button>
+      <button id="refreshBtn" class="btn" title="Refresh">
+        <svg class="icon" viewBox="0 0 24 24"><path d="M21 12a9 9 0 0 0-9-9 9.75 9.75 0 0 0-6.74 2.74L3 8"/><path d="M3 3v5h5"/><path d="M3 12a9 9 0 0 0 9 9 9.75 9.75 0 0 0 6.74-2.74L21 16"/><path d="M16 21h5v-5"/></svg>
+        Refresh
+      </button>
+    </div>
+  </header>
+
+  <!-- Compact Actionable Alert (Only when active) -->
+  <section id="diagnosticBar" class="diagnostic-bar"></section>
+
+  <!-- 5 Perfectly Uniform Stat Cards (Identical Dimensions & Layout, Zero Duplicate Info) -->
+  <section class="metrics-grid">
+    <!-- Card 1: RAM (In-Card Radial Gauge) -->
+    <div class="stat-card">
+      <div class="stat-head">
+        <span class="stat-label">RAM Load</span>
+      </div>
+      <div class="stat-body">
+        <div>
+          <div class="stat-val" id="ramVal">-- GB</div>
+          <div class="stat-sub" id="ramSub">-- / -- GB total</div>
+        </div>
+        <svg class="radial-gauge" viewBox="0 0 36 36">
+          <path class="gauge-bg" d="M18 2.0845 a 15.9155 15.9155 0 0 1 0 31.831 a 15.9155 15.9155 0 0 1 0 -31.831"/>
+          <path id="ramGauge" class="gauge-fill" stroke-dasharray="0, 100" d="M18 2.0845 a 15.9155 15.9155 0 0 1 0 31.831 a 15.9155 15.9155 0 0 1 0 -31.831"/>
+          <text id="ramGaugeText" x="18" y="21" class="gauge-text">0%</text>
+        </svg>
+      </div>
+    </div>
+
+    <!-- Card 2: GPU VRAM (In-Card Radial Gauge) -->
+    <div class="stat-card">
+      <div class="stat-head">
+        <span class="stat-label">GPU VRAM</span>
+        <span class="tag-neu" id="gpuTag">GPU</span>
+      </div>
+      <div class="stat-body">
+        <div>
+          <div class="stat-val" id="gpuVal">-- MB</div>
+          <div class="stat-sub" id="gpuSub">-- total</div>
+        </div>
+        <svg class="radial-gauge" viewBox="0 0 36 36">
+          <path class="gauge-bg" d="M18 2.0845 a 15.9155 15.9155 0 0 1 0 31.831 a 15.9155 15.9155 0 0 1 0 -31.831"/>
+          <path id="gpuGauge" class="gauge-fill" stroke-dasharray="0, 100" d="M18 2.0845 a 15.9155 15.9155 0 0 1 0 31.831 a 15.9155 15.9155 0 0 1 0 -31.831"/>
+          <text id="gpuGaugeText" x="18" y="21" class="gauge-text">0%</text>
+        </svg>
+      </div>
+    </div>
+
+    <!-- Card 3: Storage (In-Card Radial Gauge) -->
+    <div class="stat-card">
+      <div class="stat-head">
+        <span class="stat-label">Storage</span>
+        <span class="tag-neu" id="modelsTag">-- models</span>
+      </div>
+      <div class="stat-body">
+        <div>
+          <div class="stat-val" id="storageVal">-- GB</div>
+          <div class="stat-sub" id="diskFreeVal">-- GB free disk</div>
+        </div>
+        <svg class="radial-gauge" viewBox="0 0 36 36">
+          <path class="gauge-bg" d="M18 2.0845 a 15.9155 15.9155 0 0 1 0 31.831 a 15.9155 15.9155 0 0 1 0 -31.831"/>
+          <path id="storageGauge" class="gauge-fill" stroke="#059669" stroke-dasharray="0, 100" d="M18 2.0845 a 15.9155 15.9155 0 0 1 0 31.831 a 15.9155 15.9155 0 0 1 0 -31.831"/>
+          <g transform="translate(11, 11)">
+            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" style="color:var(--ink-muted);transform:rotate(90deg);transform-origin:7px 7px;">
+              <ellipse cx="12" cy="5" rx="9" ry="3"/>
+              <path d="M21 12c0 1.66-4 3-9 3s-9-1.34-9-3"/>
+              <path d="M3 5v14c0 1.66 4 3 9 3s9-1.34 9-3V5"/>
+            </svg>
+          </g>
+        </svg>
+      </div>
+    </div>
+
+    <!-- Card 4: Generation Speed (In-Card SVG Sparkline Trend) -->
+    <div class="stat-card">
+      <div class="stat-head">
+        <span class="stat-label">Speed</span>
+      </div>
+      <div class="stat-body">
+        <div>
+          <div class="stat-val" id="tpsVal">-- tps</div>
+          <div class="stat-sub" id="latencyVal">-- s avg latency</div>
+        </div>
+        <!-- In-Card Sparkline Graph -->
+        <svg class="sparkline-svg" viewBox="0 0 72 36">
+          <path id="tpsSparkFill" class="spark-fill" d="M0,36 L72,36 Z"/>
+          <path id="tpsSparkLine" class="spark-line" d="M0,24 Q36,12 72,20"/>
+        </svg>
+      </div>
+    </div>
+
+    <!-- Card 5: Proxied Requests (In-Card SVG Sparkline Trend) -->
+    <div class="stat-card">
+      <div class="stat-head">
+        <span class="stat-label">Requests</span>
+      </div>
+      <div class="stat-body">
+        <div>
+          <div class="stat-val" id="requestsVal">--</div>
+          <div class="stat-sub" id="tokensVal">-- prompt · -- out</div>
+        </div>
+        <!-- In-Card Sparkline Graph -->
+        <svg class="sparkline-svg" viewBox="0 0 72 36">
+          <path id="reqSparkFill" class="spark-fill" d="M0,36 L72,36 Z"/>
+          <path id="reqSparkLine" class="spark-line" d="M0,28 Q36,8 72,16"/>
+        </svg>
+      </div>
+    </div>
+  </section>
+
+  <!-- Active VRAM Models -->
+  <section class="panel neu-card">
+    <div class="panel-head">
+      <div style="display:flex; align-items:center; gap:10px;">
+        <h2 class="panel-title">Active Models in VRAM</h2>
+        <span class="neu-pill" id="backendTypeBadge" style="font-size:10.5px;">Live Engine ps</span>
+      </div>
+    </div>
+    <div class="neu-table-wrap">
+      <table>
+        <thead>
+          <tr>
+            <th>Model</th>
+            <th>VRAM Footprint</th>
+            <th>Active Context (In VRAM)</th>
+            <th>Saved Modelfile</th>
+            <th>Rebuild Status</th>
+            <th>Actions</th>
+          </tr>
+        </thead>
+        <tbody id="loadedBody">
+          <tr><td colspan="6" style="color:var(--ink-muted);text-align:center;padding:12px;">Scanning active models…</td></tr>
+        </tbody>
+      </table>
+    </div>
+  </section>
+
+  <!-- Nova Modelfile Editor (Optional Power-User Tool) -->
+  <section class="panel neu-card">
+    <div class="panel-head">
+      <div style="display:flex; align-items:center; gap:10px;">
+        <h2 class="panel-title">Model Tuning Studio</h2>
+        <span class="neu-pill" style="font-size:10.5px;">Optional · Modelfile</span>
+      </div>
+      <div style="display:flex; gap:10px;">
+        <button id="saveModelBtn" class="btn">
+          <svg class="icon" viewBox="0 0 24 24"><path d="M19 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h11l5 5v11a2 2 0 0 1-2 2z"/><polyline points="17 21 17 13 7 13 7 21"/><polyline points="7 3 7 8 15 8"/></svg>
+          Save
+        </button>
+        <button id="rebuildBtn" class="btn btn-primary">
+          <svg class="icon" viewBox="0 0 24 24"><polyline points="23 4 23 10 17 10"/><polyline points="1 20 1 14 7 14"/><path d="M3.51 9a9 9 0 0 1 14.85-3.36L23 10M1 14l4.64 4.36A9 9 0 0 0 20.49 15"/></svg>
+          Rebuild Nova
+        </button>
+      </div>
+    </div>
+
+    <!-- Modelfile Context & Status Banner -->
+    <div id="modelfileStatusBanner" class="neu-inset-well" style="margin-bottom:14px; font-size:12px; display:flex; justify-content:space-between; align-items:center; flex-wrap:wrap; gap:10px;">
+      <div style="display:flex; align-items:center; flex-wrap:wrap; gap:6px;">
+        <span style="font-weight:700; color:var(--ink);">Saved Modelfile:</span>
+        <span id="bannerSavedCtx" class="neu-pill ok" style="font-size:11px;">8,192 tokens</span>
+        <span style="margin:0 4px; color:var(--ink-subtle);">·</span>
+        <span style="font-weight:700; color:var(--ink);">Active in VRAM:</span>
+        <span id="bannerActiveCtx" class="neu-pill" style="font-size:11px;">Checking…</span>
+      </div>
+      <div id="bannerRebuildNotice" style="font-size:11.5px; font-weight:600;"></div>
+    </div>
+
+    <!-- Hardware Tuning Presets Bar -->
+    <div class="studio-preset-bar">
+      <div class="preset-label-wrap">
+        <svg class="icon" viewBox="0 0 24 24" style="width:14px;height:14px;color:var(--accent-blue);"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 0 1 0 2.83 2 2 0 0 1-2.83 0l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-2 2 2 2 0 0 1-2-2v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 0 1-2.83 0 2 2 0 0 1 0-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1-2-2 2 2 0 0 1 2-2h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 0 1 0-2.83 2 2 0 0 1 2.83 0l.06.06a1.65 1.65 0 0 0 1.82.33H9a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 2-2 2 2 0 0 1 2 2v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 0 1 2.83 0 2 2 0 0 1 0 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 2 2 2 2 0 0 1-2 2h-.09a1.65 1.65 0 0 0-1.51 1z"/></svg>
+        <span style="font-weight:700; font-size:12px; color:var(--ink);">Hardware Presets:</span>
+      </div>
+      <div class="preset-buttons">
+        <button type="button" class="preset-btn" id="presetLowBtn" onclick="applyPreset('low')" title="Optimized for laptops and GPUs with <6 GB VRAM">
+          <span class="preset-title">Low (2K)</span>
+          <span class="preset-sub">&lt;6GB VRAM · Laptops</span>
+        </button>
+        <button type="button" class="preset-btn" id="presetMedBtn" onclick="applyPreset('medium')" title="Standard balanced profile for 6-8 GB VRAM">
+          <span class="preset-title">Medium (4K)</span>
+          <span class="preset-sub">6–8GB VRAM · Balanced</span>
+        </button>
+        <button type="button" class="preset-btn" id="presetHighBtn" onclick="applyPreset('high')" title="Full power 8K context profile for 12+ GB VRAM">
+          <span class="preset-title">High (8K)</span>
+          <span class="preset-sub">12GB+ VRAM · Heavy</span>
+        </button>
+      </div>
+      <div class="preset-status-wrap">
+        <span id="activePresetBadge" class="neu-pill" style="font-size:11px;">Custom Profile</span>
+      </div>
+    </div>
+
+    <div style="margin-bottom:12px;">
+      <label for="systemPrompt" style="display:block; margin-bottom:6px; font-weight:700; font-size:12px;">System Prompt</label>
+      <textarea id="systemPrompt" rows="3" placeholder="System instructions…"></textarea>
+    </div>
+    <div id="paramsContainer" class="params-grid"></div>
+  </section>
+
+  <!-- Usage History -->
+  <section class="panel neu-card" id="historyPanel">
+    <div class="panel-head" style="cursor:pointer;" onclick="toggleHistoryCollapse(event)">
+      <div style="display:flex; align-items:center; gap:10px;">
+        <h2 class="panel-title" style="user-select:none;">Usage History</h2>
+        <span class="neu-pill ok" style="font-size:10.5px;">SQLite Powered</span>
+        <span class="neu-pill" style="font-size:10.5px;">Proxy Requests Only</span>
+      </div>
+      <div style="display:flex; align-items:center; gap:8px;">
+        <span id="historyRowCountBadge" class="neu-pill" style="font-size:11px;">0 requests</span>
+        <button id="historyCollapseBtn" class="btn btn-sm" onclick="toggleHistoryCollapse(event)" title="Collapse / Expand Usage History" style="display:flex; align-items:center; gap:5px;">
+          <span id="historyCollapseLabel">Collapse</span>
+          <svg id="historyChevron" class="icon" style="transition:transform 0.25s ease;" viewBox="0 0 24 24"><polyline points="6 9 12 15 18 9"/></svg>
+        </button>
+      </div>
+    </div>
+    <div id="historyContentWrap">
+      <div class="neu-inset-well" style="margin-bottom:12px; font-size:12px; display:flex; justify-content:space-between; align-items:center; flex-wrap:wrap; gap:8px;">
+        <div>
+          <strong style="color:var(--ink);">Tracking Scope:</strong> Only requests routed through the dashboard proxy (<code>http://127.0.0.1:8080/v1</code>) are recorded into SQLite. Direct calls to local backend bypass the proxy.
+        </div>
+        <button class="btn btn-sm" onclick="navigator.clipboard.writeText('http://127.0.0.1:8080/v1'); showToast({ title: 'Proxy Copied', message: 'http://127.0.0.1:8080/v1 copied to clipboard.', type: 'success' })">
+          Copy Proxy URL
+        </button>
+      </div>
+      <div class="neu-table-wrap">
+        <table>
+          <thead>
+            <tr>
+              <th>Time</th>
+              <th>Model</th>
+              <th>Endpoint</th>
+              <th>Prompt</th>
+              <th>Output</th>
+              <th>Latency</th>
+              <th>Speed</th>
+            </tr>
+          </thead>
+          <tbody id="historyBody">
+            <tr><td colspan="7" style="color:var(--ink-muted);text-align:center;padding:12px;">No requests recorded yet. Configure your client to <code>http://127.0.0.1:8080/v1</code>.</td></tr>
+          </tbody>
+        </table>
+      </div>
+      <div id="historyViewMoreWrap" style="display:none; text-align:center; padding:12px 0 2px 0;">
+        <button id="historyViewMoreBtn" class="btn btn-sm" onclick="toggleHistoryViewMore()" style="display:inline-flex; align-items:center; gap:6px; font-weight:600;">
+          <span id="historyViewMoreLabel">View More</span>
+          <svg id="historyViewMoreChevron" class="icon" style="width:14px;height:14px;transition:transform 0.2s ease;" viewBox="0 0 24 24"><polyline points="6 9 12 15 18 9"/></svg>
+        </button>
+      </div>
+    </div>
+  </section>
+</main>
+
+<!-- Floating Chat Button -->
+<button id="fabChatBtn" class="floating-chat-btn" title="Open Nova Chat">
+  <svg class="icon" style="width:18px;height:18px;" viewBox="0 0 24 24"><path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"/></svg>
+  <span>Chat with Nova</span>
+</button>
+
+<!-- Neumorphic Slide-Over Chat Sidebar (Extendable / Resizable) -->
+<div id="chatBackdrop" class="chat-backdrop"></div>
+<aside id="chatSidebar" class="chat-sidebar" aria-label="Nova Chat">
+  <!-- Draggable Left Border Slider Grip -->
+  <div id="chatResizer" class="chat-resizer" title="Drag left/right to resize sidebar">
+    <div class="chat-resizer-handle">
+      <span></span>
+      <span></span>
+      <span></span>
+    </div>
+  </div>
+
+  <div class="chat-header">
+    <div style="display:flex; align-items:center; gap:10px;">
+      <div class="chat-avatar">
+        <svg class="icon brand-svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="width:20px;height:20px;">
+          <circle cx="12" cy="12" r="3" fill="currentColor" fill-opacity="0.85"/>
+          <path d="M12 2v3M12 19v3M2 12h3M19 12h3"/>
+          <path d="M18.36 5.64l-2.12 2.12M7.76 16.24l-2.12 2.12M5.64 5.64l2.12 2.12M16.24 16.24l2.12 2.12" opacity="0.6"/>
+          <circle cx="12" cy="12" r="7" stroke-dasharray="2 3" opacity="0.75"/>
+        </svg>
+      </div>
+      <div>
+        <div style="font-size:15px; font-weight:800; color:var(--ink);">Nova Chat</div>
+        <div id="chatModelBadge" style="font-size:11px; color:var(--ink-muted); font-family:monospace;">nova:latest</div>
+      </div>
+    </div>
+    <div style="display:flex; align-items:center; gap:6px;">
+      <select id="chatModelSelect" style="max-width:130px; height:32px; padding:2px 6px; font-size:11.5px;"></select>
+      <button id="clearChatBtn" class="btn btn-sm" title="Clear Chat History">
+        <svg class="icon" viewBox="0 0 24 24"><polyline points="3 6 5 6 21 6"/><path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"/></svg>
+      </button>
+      <button id="closeChatBtn" class="btn btn-sm" title="Close (Esc)">
+        <svg class="icon" viewBox="0 0 24 24"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg>
+      </button>
+    </div>
+  </div>
+
+  <div id="chatMessages" class="chat-messages">
+    <div id="chatEmptyState" style="text-align:center; margin:auto; max-width:280px; padding:16px 0;">
+      <h3 style="font-size:15px; font-weight:800; margin-bottom:4px; color:var(--ink);">Welcome to Nova Chat</h3>
+      <p style="font-size:12px; color:var(--ink-muted); margin-bottom:14px;">Local AI conversation with reasoning, vision & command execution.</p>
+      <div style="display:flex; flex-direction:column; gap:8px;">
+        <button class="btn btn-sm" style="text-align:left; justify-content:flex-start;" onclick="sendStarterPrompt('resources')">Explain system resources</button>
+        <button class="btn btn-sm" style="text-align:left; justify-content:flex-start;" onclick="sendStarterPrompt('script')">Write Python AI script</button>
+      </div>
+    </div>
+  </div>
+
+  <div class="chat-footer">
+    <div class="chat-controls-bar">
+      <div style="display:flex; align-items:center; gap:8px;">
+        <!-- Thinking Toggle -->
+        <label class="neu-switch-wrap" title="Toggle Thinking reasoning trace">
+          <span class="neu-switch sm">
+            <input id="chatThinkToggle" type="checkbox">
+            <span class="neu-slider"></span>
+          </span>
+          <span class="neu-switch-label">Thinking</span>
+        </label>
+
+        <!-- Reasoning Preview Mode -->
+        <div class="chat-preview-wrap">
+          <span class="chat-preview-label">Preview:</span>
+          <select id="previewThinkingSelect" class="neu-select-compact">
+            <option value="summary" selected>Summary</option>
+            <option value="full">Full Thinking</option>
+            <option value="hidden">Hidden</option>
+          </select>
+        </div>
+      </div>
+
+      <!-- Save Chat to SQLite Toggle -->
+      <label class="neu-switch-wrap" title="Save conversation history in SQLite database (nova-dashboard.db)">
+        <span class="neu-switch sm">
+          <input id="saveChatToggle" type="checkbox">
+          <span class="neu-slider"></span>
+        </span>
+        <span class="neu-switch-label">Save Chat</span>
+      </label>
+    </div>
+
+    <!-- Chat Input Container with Attachment & Voice -->
+    <div class="chat-input-container">
+      <!-- Attachment Preview (Image Thumbnail) -->
+      <div id="chatAttachmentPreview" class="chat-attachment-chip" style="display:none;">
+        <img id="chatAttachmentThumb" src="" alt="Attachment thumbnail">
+        <div class="chat-attachment-info">
+          <span id="chatAttachmentName" class="chat-attachment-name">image.png</span>
+          <span id="chatAttachmentSize" class="chat-attachment-size">0 KB</span>
+        </div>
+        <button type="button" id="removeAttachmentBtn" class="chat-attachment-remove" title="Remove attachment">
+          <svg viewBox="0 0 24 24" width="13" height="13" stroke="currentColor" stroke-width="2.5" fill="none"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg>
+        </button>
+      </div>
+
+      <div class="chat-input-well">
+        <!-- File/Image Attach Button -->
+        <input type="file" id="chatFileInput" accept="image/png,image/jpeg,image/webp,image/gif" style="display:none;">
+        <button type="button" id="chatAttachBtn" class="chat-action-btn" title="Attach Image (Multimodal LLMs)">
+          <svg class="icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21.44 11.05l-9.19 9.19a6 6 0 0 1-8.49-8.49l9.19-9.19a4 4 0 0 1 5.66 5.66l-9.2 9.19a2 2 0 0 1-2.83-2.83l8.49-8.48"/></svg>
+        </button>
+
+        <textarea id="chatInput" class="chat-textarea" placeholder="Message Nova or attach an image..." rows="1"></textarea>
+
+        <!-- Voice Input (Mic) Button -->
+        <button type="button" id="chatVoiceBtn" class="chat-action-btn" title="Voice Input (Speech-to-Text)">
+          <svg class="icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 1a3 3 0 0 0-3 3v8a3 3 0 0 0 6 0V4a3 3 0 0 0-3-3z"/><path d="M19 10v2a7 7 0 0 1-14 0v-2"/><line x1="12" y1="19" x2="12" y2="23"/><line x1="8" y1="23" x2="16" y2="23"/></svg>
+        </button>
+
+        <!-- Send Button -->
+        <button id="chatSendBtn" class="chat-send-btn" title="Send (Enter)">
+          <svg class="icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><line x1="22" y1="2" x2="11" y2="13"/><polygon points="22 2 15 22 11 13 2 9 22 2"/></svg>
+        </button>
+      </div>
+    </div>
+  </div>
+</aside>
+
+<!-- Rebuild Nova Warning & Confirmation Modal -->
+<div id="rebuildModal" class="neu-modal-backdrop" style="display:none;">
+  <div class="neu-modal">
+    <div style="display:flex; align-items:center; gap:12px; margin-bottom:12px;">
+      <div style="width:38px; height:38px; border-radius:50%; background:rgba(239, 68, 68, 0.12); color:#ef4444; display:flex; align-items:center; justify-content:center; flex-shrink:0;">
+        <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M10.29 3.86L1.82 18a2 2 0 0 0 1.71 3h16.94a2 2 0 0 0 1.71-3L13.71 3.86a2 2 0 0 0-3.42 0z"/><line x1="12" y1="9" x2="12" y2="13"/><line x1="12" y1="17" x2="12.01" y2="17"/></svg>
+      </div>
+      <div>
+        <h3 style="margin:0; font-size:15px; font-weight:800; color:var(--ink);">Rebuild Nova Model</h3>
+        <div style="font-size:11.5px; color:var(--ink-muted);">Base Model: <code>FROM qwen3.5:4b</code></div>
+      </div>
+    </div>
+    <div class="neu-inset-well" style="margin-bottom:14px; font-size:12.5px; line-height:1.5; color:var(--ink);">
+      <p style="margin:0 0 8px 0;">
+        This will re-compile <code>nova:latest</code> from base model <code>qwen3.5:4b</code> using the parameters saved in your Modelfile:
+      </p>
+      <ul style="margin:0 0 8px 18px; padding:0; font-size:12px; color:var(--ink);">
+        <li>Saved Context Window: <strong id="modalCtxLen">8,192</strong> tokens</li>
+        <li>Active VRAM Context: <strong id="modalActiveCtx">—</strong> tokens</li>
+      </ul>
+      <div style="color:#d97706; font-size:11.5px; font-weight:600;">
+        ⚠️ Warning: Active models in VRAM will be unloaded during rebuild. The engine re-creates layers from the base model.
+      </div>
+    </div>
+    <div style="display:flex; justify-content:flex-end; gap:10px;">
+      <button class="btn" onclick="closeRebuildModal()">Cancel</button>
+      <button id="modalConfirmBtn" class="btn btn-primary" style="background:#ef4444; color:#fff;" onclick="confirmRebuildNova()">Confirm & Rebuild</button>
+    </div>
+  </div>
+</div>
+
+<!-- Command Approval Modal -->
+<div id="cmdApprovalModal" class="neu-modal-backdrop" style="display:none;">
+  <div class="neu-modal" style="max-width:520px;">
+    <div style="display:flex; align-items:center; gap:12px; margin-bottom:12px;">
+      <div style="width:38px; height:38px; border-radius:50%; background:rgba(37, 99, 235, 0.12); color:#2563eb; display:flex; align-items:center; justify-content:center; flex-shrink:0;">
+        <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="4 17 10 11 4 5"/><line x1="12" y1="19" x2="20" y2="19"/></svg>
+      </div>
+      <div>
+        <h3 style="margin:0; font-size:15px; font-weight:800; color:var(--ink);">System Command Approval</h3>
+        <div style="font-size:11.5px; color:var(--ink-muted);">Requires explicit user consent before execution</div>
+      </div>
+    </div>
+    
+    <div class="neu-inset-well" style="margin-bottom:12px; padding:12px;">
+      <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:6px;">
+        <span style="font-size:11px; font-weight:700; color:var(--ink-muted); text-transform:uppercase;">Command to Execute:</span>
+        <span id="cmdRiskBadge" class="neu-pill" style="font-size:10.5px; min-height:22px; padding:2px 8px;">Safe / Read-only</span>
+      </div>
+      <pre style="background:rgba(0,0,0,0.1); padding:10px 12px; border-radius:6px; font-family:monospace; font-size:12.5px; white-space:pre-wrap; color:var(--ink); margin:0;" id="cmdModalCode"></pre>
+      <div id="cmdRiskWarning" style="font-size:11.5px; margin-top:8px; line-height:1.4;"></div>
+    </div>
+
+    <div style="font-size:11.5px; color:var(--ink-subtle); margin-bottom:14px;">
+      Target: <code id="cmdModalDir" style="color:var(--ink);">Current Project Directory</code>
+    </div>
+
+    <div style="display:flex; justify-content:flex-end; gap:10px;">
+      <button class="btn" onclick="closeCmdApprovalModal()">Decline</button>
+      <button id="cmdApproveBtn" class="btn btn-primary" onclick="confirmCmdExecution()">Approve & Run</button>
+    </div>
+  </div>
+</div>
+
+<!-- Trust, Privacy & Legitimacy Modal -->
+<div id="trustModal" class="neu-modal-backdrop" style="display:none;">
+  <div class="neu-modal" style="max-width:560px;">
+    <div style="display:flex; align-items:center; justify-content:space-between; margin-bottom:14px;">
+      <div style="display:flex; align-items:center; gap:12px;">
+        <div style="width:40px; height:40px; border-radius:12px; background:rgba(16, 185, 129, 0.12); color:#10b981; display:flex; align-items:center; justify-content:center; flex-shrink:0;">
+          <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z"/></svg>
+        </div>
+        <div>
+          <h3 style="margin:0; font-size:16px; font-weight:800; color:var(--ink);">Trust &amp; Privacy Transparency</h3>
+          <div style="font-size:11.5px; color:var(--ink-muted);">Built for the local AI enthusiast community · 100% Legit &amp; Open Source</div>
+        </div>
+      </div>
+      <button class="btn btn-sm" onclick="closeTrustModal()" style="border-radius:50%; width:28px; height:28px; padding:0; display:flex; align-items:center; justify-content:center;">✕</button>
+    </div>
+
+    <div class="neu-inset-well" style="margin-bottom:14px; padding:12px; display:flex; flex-direction:column; gap:10px;">
+      <div style="display:flex; align-items:flex-start; gap:10px;">
+        <span style="color:#10b981; font-size:15px;">✓</span>
+        <div>
+          <strong style="font-size:12px; color:var(--ink);">100% Offline Loopback (`127.0.0.1` Only)</strong>
+          <p style="margin:2px 0 0 0; font-size:11px; color:var(--ink-muted); line-height:1.4;">
+            Nova Console strictly binds to localhost. It does not open firewall ports, does not accept inbound traffic from your local network, and cannot be accessed externally.
+          </p>
+        </div>
+      </div>
+      <div style="display:flex; align-items:flex-start; gap:10px;">
+        <span style="color:#10b981; font-size:15px;">✓</span>
+        <div>
+          <strong style="font-size:12px; color:var(--ink);">Zero Outbound Telemetry or Tracking</strong>
+          <p style="margin:2px 0 0 0; font-size:11px; color:var(--ink-muted); line-height:1.4;">
+            No tracking pixels, no Google Analytics, no telemetry pings, and no account requirements. Your prompts, code, model weights, and tokens never leave your local drive.
+          </p>
+        </div>
+      </div>
+      <div style="display:flex; align-items:flex-start; gap:10px;">
+        <span style="color:#10b981; font-size:15px;">✓</span>
+        <div>
+          <strong style="font-size:12px; color:var(--ink);">Strict Command Approval Sandbox</strong>
+          <p style="margin:2px 0 0 0; font-size:11px; color:var(--ink-muted); line-height:1.4;">
+            AI models cannot run silent background terminal commands. Every command requires an explicit modal review with risk analysis before execution.
+          </p>
+        </div>
+      </div>
+      <div style="display:flex; align-items:flex-start; gap:10px;">
+        <span style="color:#10b981; font-size:15px;">✓</span>
+        <div>
+          <strong style="font-size:12px; color:var(--ink);">Fully Inspectable Open Source (MIT)</strong>
+          <p style="margin:2px 0 0 0; font-size:11px; color:var(--ink-muted); line-height:1.4;">
+            No closed-source DLLs or obfuscated blobs. You can read, audit, and modify every line of Python and JavaScript, or run directly via <code>python launch.py</code> without compiling.
+          </p>
+        </div>
+      </div>
+    </div>
+
+    <div style="display:flex; justify-content:space-between; align-items:center; flex-wrap:wrap; gap:8px;">
+      <span style="font-size:11px; color:var(--ink-subtle);">License: <strong>MIT Open Source</strong></span>
+      <div style="display:flex; gap:8px;">
+        <button class="btn btn-sm" onclick="window.open('https://github.com/ad4rshp/nova-console', '_blank')">View GitHub Source</button>
+        <button class="btn btn-sm btn-primary" onclick="closeTrustModal()">Close</button>
+      </div>
+    </div>
+  </div>
+</div>
+
+<!-- Toast Container -->
+<div id="toastContainer"></div>
+
+  <!-- Modular Dashboard Scripts -->
+  <script src="/static/js/dashboard.js"></script>
+</body>
+</html>
