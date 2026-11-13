@@ -32,7 +32,8 @@ def create_provider_by_type(provider_type: str, url: str) -> LLMProvider:
 
 async def detect_provider(url: str = LLM_BACKEND_URL) -> LLMProvider:
     """
-    Auto-detects the running provider by probing server endpoints.
+    Auto-detects the running provider by probing server endpoints and response headers.
+    Avoids brittle port heuristics whenever the backend is reachable.
     """
     global _CACHED_PROVIDER
 
@@ -51,16 +52,31 @@ async def detect_provider(url: str = LLM_BACKEND_URL) -> LLMProvider:
         except Exception:
             pass
 
-        # 2. Probe OpenAI /v1/models (LM Studio, vLLM, LocalAI)
+        # 2. Probe llama.cpp / llama-server (/health)
+        try:
+            res = await client.get(f"{url}/health")
+            if res.status_code == 200:
+                body = res.text.lower()
+                if "slots" in body or "llama" in body or "idle" in body:
+                    _CACHED_PROVIDER = LlamaServerAdapter(url)
+                    return _CACHED_PROVIDER
+        except Exception:
+            pass
+
+        # 3. Probe OpenAI-compatible /v1/models (inspecting Server header and payload)
         try:
             res = await client.get(f"{url}/v1/models")
             if res.status_code == 200:
+                server_hdr = res.headers.get("server", "").lower()
                 headers_str = str(res.headers).lower()
-                if "1234" in url or "lmstudio" in headers_str:
+
+                if "llama" in server_hdr or "llama.cpp" in headers_str:
+                    _CACHED_PROVIDER = LlamaServerAdapter(url)
+                elif "lmstudio" in server_hdr or "lmstudio" in headers_str:
                     _CACHED_PROVIDER = LMStudioAdapter(url)
-                elif "8000" in url or "vllm" in headers_str:
+                elif "vllm" in server_hdr or "vllm" in headers_str:
                     _CACHED_PROVIDER = VLLMAdapter(url)
-                elif "localai" in headers_str:
+                elif "localai" in server_hdr or "localai" in headers_str:
                     _CACHED_PROVIDER = LocalAIAdapter(url)
                 else:
                     _CACHED_PROVIDER = OpenAICompatibleAdapter(url)
@@ -68,19 +84,30 @@ async def detect_provider(url: str = LLM_BACKEND_URL) -> LLMProvider:
         except Exception:
             pass
 
-    # Port-based heuristics fallback
+    # Port-based heuristics fallback only when offline / probing fails
     if ":11434" in url:
         _CACHED_PROVIDER = OllamaAdapter(url)
     elif ":1234" in url:
         _CACHED_PROVIDER = LMStudioAdapter(url)
     elif ":8000" in url:
         _CACHED_PROVIDER = VLLMAdapter(url)
+    elif ":8081" in url or "llama" in url:
+        _CACHED_PROVIDER = LlamaServerAdapter(url)
     elif "localai" in url:
         _CACHED_PROVIDER = LocalAIAdapter(url)
     else:
         _CACHED_PROVIDER = OllamaAdapter(url)
 
     return _CACHED_PROVIDER
+
+async def get_async_provider(url: str = LLM_BACKEND_URL, force_refresh: bool = False) -> LLMProvider:
+    """
+    Returns the auto-detected provider asynchronously.
+    """
+    global _CACHED_PROVIDER
+    if _CACHED_PROVIDER and not force_refresh:
+        return _CACHED_PROVIDER
+    return await detect_provider(url)
 
 def get_provider(url: str = LLM_BACKEND_URL) -> LLMProvider:
     """
@@ -99,6 +126,8 @@ def get_provider(url: str = LLM_BACKEND_URL) -> LLMProvider:
         _CACHED_PROVIDER = LMStudioAdapter(url)
     elif ":8000" in url:
         _CACHED_PROVIDER = VLLMAdapter(url)
+    elif ":8081" in url or "llama" in url:
+        _CACHED_PROVIDER = LlamaServerAdapter(url)
     elif "localai" in url:
         _CACHED_PROVIDER = LocalAIAdapter(url)
     else:

@@ -12,6 +12,7 @@ from starlette.middleware.base import BaseHTTPMiddleware
 
 from app.config import (
     BASE_DIR,
+    HOST,
     NOVA_ALLOW_LAN,
     PORT,
     STATIC_DIR,
@@ -42,6 +43,8 @@ def get_allowed_origins() -> list[str]:
     ]
     if PORT == 80:
         origins.extend(["http://127.0.0.1", "http://localhost"])
+    if NOVA_ALLOW_LAN and HOST not in ("0.0.0.0", "::", "", "127.0.0.1", "localhost"):
+        origins.append(f"http://{HOST}:{PORT}")
     custom = os.environ.get("NOVA_CORS_ORIGINS", "")
     if custom:
         for c in custom.split(","):
@@ -77,11 +80,6 @@ def is_valid_csrf_origin(origin_str: str) -> bool:
                 if allow_port is None and port is None:
                     return True
 
-        if NOVA_ALLOW_LAN:
-            if host in ("127.0.0.1", "localhost", "::1"):
-                return port is None or port == PORT
-            return True
-
         return False
     except Exception:
         return False
@@ -91,6 +89,7 @@ SENSITIVE_API_PREFIXES = (
     "/api/modelfile",
     "/api/rebuild-nova",
     "/api/settings",
+    "/api/chat-history",
     "/api/clear-chat-history",
     "/api/unload",
 )
@@ -104,6 +103,7 @@ class SecurityHeadersMiddleware(BaseHTTPMiddleware):
         # 1. Request Body Size Limits (10MB global, 1MB for sensitive admin endpoints)
         is_sensitive = any(request.url.path.startswith(prefix) for prefix in SENSITIVE_API_PREFIXES)
         max_bytes = 1 * 1024 * 1024 if is_sensitive else 10 * 1024 * 1024
+
         content_length = request.headers.get("content-length")
         if content_length:
             try:
@@ -115,6 +115,26 @@ class SecurityHeadersMiddleware(BaseHTTPMiddleware):
                     )
             except ValueError:
                 return JSONResponse(status_code=400, content={"error": "Invalid Content-Length header."})
+
+        # Enforce streaming byte limits when consuming body (guards against chunked/unbounded transfer)
+        if request.method in ("POST", "PUT", "PATCH"):
+            body_chunks = []
+            bytes_read = 0
+            async for chunk in request.stream():
+                bytes_read += len(chunk)
+                if bytes_read > max_bytes:
+                    limit_mb = max_bytes // (1024 * 1024)
+                    return JSONResponse(
+                        status_code=413,
+                        content={"error": f"Payload Too Large: request body exceeds maximum allowed limit of {limit_mb}MB."}
+                    )
+                body_chunks.append(chunk)
+
+            full_body = b"".join(body_chunks)
+            request._body = full_body
+            async def receive():
+                return {"type": "http.request", "body": full_body, "more_body": False}
+            request._receive = receive
 
         # 2. Authentication enforcement on sensitive routes when LAN mode is active or auth explicitly required
         require_auth = NOVA_ALLOW_LAN or os.environ.get("NOVA_REQUIRE_AUTH", "0") in ("1", "true", "yes")
@@ -162,7 +182,14 @@ async def lifespan(app: FastAPI):
         db_cleanup_old_records()
     except Exception:
         pass
+    # Auto-detect active backend provider on startup
+    try:
+        from app.services.providers.factory import detect_provider
+        await detect_provider()
+    except Exception:
+        pass
     yield
+    db_checkpoint()
     db_checkpoint()
 
 app = FastAPI(

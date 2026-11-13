@@ -79,8 +79,33 @@ def get_restricted_path() -> str:
     existing = [d for d in safe_dirs if os.path.isdir(d)]
     return sep.join(existing)
 
+def _setup_posix_sandbox():
+    """Sets process group and configures OS resource limits on Linux/macOS."""
+    os.setsid()
+    try:
+        import resource
+        # Maximum CPU time (15s soft, 20s hard)
+        resource.setrlimit(resource.RLIMIT_CPU, (15, 20))
+        # Maximum virtual memory / address space (1GB)
+        resource.setrlimit(resource.RLIMIT_AS, (1024 * 1024 * 1024, 1024 * 1024 * 1024))
+        # Maximum file write size (25MB)
+        resource.setrlimit(resource.RLIMIT_FSIZE, (25 * 1024 * 1024, 25 * 1024 * 1024))
+        # Maximum open file descriptors
+        resource.setrlimit(resource.RLIMIT_NOFILE, (128, 128))
+        # Maximum subprocesses to prevent fork bombs
+        if hasattr(resource, "RLIMIT_NPROC"):
+            resource.setrlimit(resource.RLIMIT_NPROC, (32, 32))
+    except Exception:
+        pass
+
 def is_strict_sandbox() -> bool:
     return os.environ.get("NOVA_TERMINAL_SANDBOX", "0").lower() in ("strict", "1", "true", "yes")
+
+def is_terminal_globally_enabled() -> bool:
+    """Checks whether terminal execution is enabled on this system."""
+    if os.environ.get("NOVA_DISABLE_TERMINAL", "0").lower() in ("1", "true", "yes"):
+        return False
+    return True
 
 def validate_command_chaining(command: str) -> tuple[bool, str]:
     """
@@ -296,9 +321,15 @@ def run_system_command(
         }
 
     # Defense in depth: Disable terminal execution by default for network-exposed LAN deployments
-    from app.config import NOVA_ALLOW_LAN
+    import sys
+
+    from app import config
+    app_main = sys.modules.get("app.main")
+    main_lan = getattr(app_main, "NOVA_ALLOW_LAN", False) if app_main else False
+    config_lan = getattr(config, "NOVA_ALLOW_LAN", False)
+    lan_active = main_lan or config_lan
     is_lan_terminal_enabled = os.environ.get("NOVA_ENABLE_TERMINAL_LAN", "0").lower() in ("1", "true", "yes")
-    if NOVA_ALLOW_LAN and not is_lan_terminal_enabled:
+    if lan_active and not is_lan_terminal_enabled:
         return {
             "ok": False,
             "error": "Terminal execution is disabled by default on network-exposed deployments (NOVA_ALLOW_LAN=1). Set NOVA_ENABLE_TERMINAL_LAN=1 to explicitly permit terminal commands over LAN.",
@@ -392,13 +423,19 @@ def run_system_command(
     start_time = time.perf_counter()
     is_windows = platform.system() == "Windows"
 
-    # Restricted environment: prevent subprocess from inheriting host secrets
+    # Restricted environment: prevent subprocess from inheriting host secrets or API credentials
     safe_env = os.environ.copy()
-    for sensitive_key in [
-        "NOVA_ADMIN_KEY", "NOVA_API_KEY", "OPENAI_API_KEY", "AWS_SECRET_ACCESS_KEY",
-        "GITHUB_TOKEN", "TOKEN", "PASSWORD", "SECRET"
-    ]:
-        safe_env.pop(sensitive_key, None)
+    secret_terms = ("NOVA", "TOKEN", "SECRET", "KEY", "PASS", "AUTH", "CREDENTIAL", "AWS", "GITHUB", "OPENAI")
+    for k in list(safe_env.keys()):
+        if any(term in k.upper() for term in secret_terms):
+            safe_env.pop(k, None)
+
+    if is_windows:
+        creation_flags = subprocess.CREATE_NEW_PROCESS_GROUP
+        if hasattr(subprocess, "CREATE_NO_WINDOW"):
+            creation_flags |= subprocess.CREATE_NO_WINDOW
+    else:
+        creation_flags = 0
 
     # Restrict PATH to safe system locations and virtual environment
     safe_env["PATH"] = get_restricted_path()
@@ -413,7 +450,7 @@ def run_system_command(
                 stderr=subprocess.PIPE,
                 text=True,
                 env=safe_env,
-                creationflags=subprocess.CREATE_NEW_PROCESS_GROUP
+                creationflags=creation_flags
             )
         else:
             bash_cmd = ["/bin/bash", "--noprofile", "--norc"]
@@ -428,7 +465,7 @@ def run_system_command(
                 stderr=subprocess.PIPE,
                 text=True,
                 env=safe_env,
-                preexec_fn=os.setsid
+                preexec_fn=_setup_posix_sandbox
             )
 
         try:

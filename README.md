@@ -82,9 +82,10 @@ Set environment variables or use a `.env` file:
 ## Security
 
 - **Loopback Default**: Binds to `127.0.0.1`. Non-loopback addresses fail startup unless `NOVA_ALLOW_LAN=1` is set.
-- **Terminal Execution**: Requires single-use server approval token, server-side user authorization, and execution within the workspace directory. Catastrophic commands are blocked.
-- **LAN Protection**: When `NOVA_ALLOW_LAN=1` is enabled, sensitive endpoints (`/api/terminal/*`, `/api/modelfile`, `/api/settings`) require `Authorization: Bearer <token>` or `X-Nova-Auth`.
-- **Browser Protection**: CSRF origin checking on mutating endpoints and security headers (`nosniff`, `SAMEORIGIN`).
+- **Terminal Execution**: Restricted execution environment with resource limits (POSIX setrlimit / Windows process group), directory confinement, sanitized environment variables, single-use cryptographic approval tokens, and server user authorization. Catastrophic commands are blocked.
+- **LAN Protection**: When `NOVA_ALLOW_LAN=1` is enabled, sensitive endpoints (`/api/terminal/*`, `/api/modelfile`, `/api/settings`, `/api/chat-history`, `/v1/*`) require `Authorization: Bearer <token>` or `X-Nova-Auth`. Arbitrary non-loopback origins are strictly rejected.
+- **Credential Stripping**: Nova's administrative credentials are never forwarded upstream to the backend inference server.
+- **Browser Protection**: Strict CSRF origin checking on mutating endpoints and security headers (`nosniff`, `SAMEORIGIN`).
 
 ## License
 

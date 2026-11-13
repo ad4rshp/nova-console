@@ -440,5 +440,108 @@ def test_csrf_deep_validation(client):
     )
     assert res_valid.status_code == 200
 
+def test_lan_mode_rejects_untrusted_origins(client, monkeypatch):
+    """Ensure that in LAN mode, arbitrary non-loopback website origins (e.g. evil.com) are rejected."""
+    from app.services.auth import get_or_create_admin_token
+    admin_token = get_or_create_admin_token()
+
+    monkeypatch.setattr("app.main.NOVA_ALLOW_LAN", True)
+
+    untrusted_origins = [
+        "https://evil.com",
+        "http://attacker.org:8080",
+        "https://malicious-site.io",
+        "http://192.168.1.99:9999",
+    ]
+
+    for bad_origin in untrusted_origins:
+        res = client.post(
+            "/api/settings",
+            json={"theme": "dark"},
+            headers={"Origin": bad_origin, "X-Nova-Auth": admin_token}
+        )
+        assert res.status_code == 403, f"Expected 403 for untrusted LAN origin {bad_origin}, got {res.status_code}"
+        assert "CSRF" in res.json().get("error", "")
+
+def test_chat_history_requires_auth_in_lan_mode(client, monkeypatch):
+    """Ensure chat history retrieval and clearing require authentication when LAN mode is active."""
+    from app.services.auth import get_or_create_admin_token
+    admin_token = get_or_create_admin_token()
+
+    monkeypatch.setattr("app.main.NOVA_ALLOW_LAN", True)
+
+    # 1. Unauthenticated GET /api/chat-history must return 401
+    get_unauth = client.get("/api/chat-history")
+    assert get_unauth.status_code == 401
+
+    # 2. Authenticated GET /api/chat-history succeeds
+    get_auth = client.get("/api/chat-history", headers={"X-Nova-Auth": admin_token})
+    assert get_auth.status_code == 200
+
+    # 3. Unauthenticated POST /api/clear-chat-history must return 401
+    clear_unauth = client.post("/api/clear-chat-history")
+    assert clear_unauth.status_code == 401
+
+    # 4. Authenticated POST /api/clear-chat-history succeeds
+    clear_auth = client.post("/api/clear-chat-history", headers={"X-Nova-Auth": admin_token})
+    assert clear_auth.status_code == 200
+
+def test_chat_payload_validation_rejects_malformed_inputs(client):
+    """Ensure dashboard chat endpoint strictly validates roles, message counts, and lengths."""
+    # 1. Invalid role
+    res_bad_role = client.post("/api/dashboard-chat", json={
+        "messages": [{"role": "hacker", "content": "malicious input"}]
+    })
+    assert res_bad_role.status_code == 422
+
+    # 2. Invalid model pattern
+    res_bad_model = client.post("/api/dashboard-chat", json={
+        "model": "model; rm -rf /",
+        "messages": [{"role": "user", "content": "hello"}]
+    })
+    assert res_bad_model.status_code == 422
+
+    # 3. Excessive messages (>100)
+    huge_messages = [{"role": "user", "content": f"msg {i}"} for i in range(105)]
+    res_excessive = client.post("/api/dashboard-chat", json={
+        "messages": huge_messages
+    })
+    assert res_excessive.status_code == 422
+
+def test_terminal_global_disable_flag(monkeypatch):
+    """Ensure setting NOVA_DISABLE_TERMINAL=1 blocks all command execution."""
+    from app.services.auth import get_or_create_admin_token
+    from app.services.terminal import generate_approval_token, run_system_command
+    admin_token = get_or_create_admin_token()
+
+    monkeypatch.setenv("NOVA_DISABLE_TERMINAL", "1")
+
+    token_data = generate_approval_token("echo test_disabled")
+    res = run_system_command("echo test_disabled", approval_token=token_data["approval_token"], user_authorization=admin_token)
+    assert res["ok"] is False
+    assert res["return_code"] == 403
+    assert "disabled" in res["error"].lower()
+
+def test_rate_limiter_bounded_storage_and_categories():
+    """Ensure SlidingWindowRateLimiter limits by category and prunes old keys to prevent unbounded memory."""
+    from app.services.rate_limiter import SlidingWindowRateLimiter
+    limiter = SlidingWindowRateLimiter(default_limit=10, max_tracked_keys=50)
+
+    # Category limits
+    allowed_chat, rem_chat, _ = limiter.check_rate_limit("1.2.3.4", category="chat")
+    assert allowed_chat is True
+    assert rem_chat > 0
+
+    allowed_proxy, rem_proxy, _ = limiter.check_rate_limit("1.2.3.4", category="proxy")
+    assert allowed_proxy is True
+
+    # Memory bounding: add 100 distinct client IPs
+    for i in range(100):
+        limiter.check_rate_limit(f"10.0.0.{i}", category="chat")
+
+    # Storage should be bounded to around max_tracked_keys
+    assert len(limiter._requests) <= 55
+
+
 
 

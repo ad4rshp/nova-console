@@ -135,5 +135,41 @@ def test_request_correlation_id_header(client):
     res2 = client.get("/api/dashboard", headers={"X-Request-ID": custom_id})
     assert res2.headers.get("X-Request-ID") == custom_id
 
+def test_proxy_strips_nova_admin_credentials_to_upstream(client, monkeypatch):
+    """Ensure Nova's admin token is stripped before forwarding upstream so it never leaks."""
+    import httpx
+
+    from app.services.auth import get_or_create_admin_token
+    admin_token = get_or_create_admin_token()
+
+    captured_headers = {}
+
+    def mock_build_request(self, method, url, **kwargs):
+        nonlocal captured_headers
+        captured_headers = kwargs.get("headers", {})
+        return httpx.Request(method, url)
+
+    async def mock_send(self, request, **kwargs):
+        return httpx.Response(200, json={"data": []})
+
+    monkeypatch.setattr("httpx.AsyncClient.build_request", mock_build_request)
+    monkeypatch.setattr("httpx.AsyncClient.send", mock_send)
+
+    client.get(
+        "/v1/models",
+        headers={
+            "Authorization": f"Bearer {admin_token}",
+            "X-Nova-Auth": admin_token,
+            "X-Custom-Client-Header": "client-value",
+        }
+    )
+
+    # 1. X-Nova-Auth must be stripped
+    assert "x-nova-auth" not in captured_headers
+    # 2. Authorization with Nova admin key must be stripped
+    assert "authorization" not in captured_headers or admin_token not in captured_headers["authorization"]
+    # 3. Harmless custom client headers are preserved
+    assert captured_headers.get("x-custom-client-header") == "client-value"
+
 
 

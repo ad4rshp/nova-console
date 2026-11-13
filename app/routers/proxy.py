@@ -39,8 +39,8 @@ HOP_BY_HOP_HEADERS = {
 async def proxy_v1(path: str, request: Request):
     client_ip = request.client.host if request.client else "127.0.0.1"
 
-    # 1. Rate Limiting Enforcement
-    allowed, remaining, retry_after = global_rate_limiter.check_rate_limit(client_ip)
+    # 1. Rate Limiting Enforcement (Category: proxy, 120 req/min default)
+    allowed, remaining, retry_after = global_rate_limiter.check_rate_limit(client_ip, category="proxy")
     if not allowed:
         return JSONResponse(
             status_code=429,
@@ -50,9 +50,10 @@ async def proxy_v1(path: str, request: Request):
 
     # 2. Proxy Authentication Enforcement (Mandatory when LAN mode or auth requirement is active)
     require_proxy_auth = is_lan_mode_active() or os.environ.get("NOVA_REQUIRE_AUTH", "0") in ("1", "true", "yes")
+    auth_header = request.headers.get("Authorization", "")
+    token = auth_header[7:].strip() if auth_header.startswith("Bearer ") else request.headers.get("X-Nova-Auth", "")
+    
     if require_proxy_auth:
-        auth_header = request.headers.get("Authorization", "")
-        token = auth_header[7:].strip() if auth_header.startswith("Bearer ") else request.headers.get("X-Nova-Auth", "")
         if not verify_admin_token(token):
             return JSONResponse(
                 status_code=401,
@@ -60,10 +61,28 @@ async def proxy_v1(path: str, request: Request):
             )
 
     target_url = f"{LLM_BACKEND_URL}/v1/{path}"
-    headers = {
-        k: v for k, v in request.headers.items()
-        if k.lower() not in HOP_BY_HOP_HEADERS
-    }
+
+    # 3. Secure Upstream Header Forwarding
+    # Explicitly strip hop-by-hop headers and internal Nova credentials so they never leak to upstream LLMs
+    backend_api_key = os.environ.get("NOVA_BACKEND_API_KEY") or os.environ.get("BACKEND_API_KEY")
+    headers: dict[str, str] = {}
+    
+    for k, v in request.headers.items():
+        k_lower = k.lower()
+        if k_lower in HOP_BY_HOP_HEADERS:
+            continue
+        if k_lower in ("x-nova-auth", "x-nova-admin"):
+            continue
+        if k_lower == "authorization":
+            # If the client sent Nova's admin token, strip it so it does not leak upstream
+            prov_tok = v[7:].strip() if v.startswith("Bearer ") else v.strip()
+            if verify_admin_token(prov_tok):
+                continue
+        headers[k] = v
+
+    # Attach configured upstream backend API key if present and authorization not already set
+    if backend_api_key and "authorization" not in {k.lower() for k in headers}:
+        headers["Authorization"] = f"Bearer {backend_api_key.strip()}"
 
     body = await request.body()
     start_time = time.perf_counter()

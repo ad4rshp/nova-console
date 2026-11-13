@@ -1,4 +1,3 @@
-from typing import Any
 
 from pydantic import BaseModel, ConfigDict, Field
 
@@ -40,12 +39,16 @@ class ExecuteCommandPayload(BaseModel):
 
 class ChatMessagePayload(BaseModel):
     role: str = Field(..., pattern=r"^(user|assistant|system)$")
-    content: str = ""
-    images: list[str] = Field(default_factory=list)
+    content: str = Field(default="", max_length=131072)
+    images: list[str] = Field(default_factory=list, max_length=10)
+
+    model_config = ConfigDict(extra="ignore")
 
 class DashboardChatPayload(BaseModel):
-    model: str | None = None
-    messages: list[dict[str, Any]] = Field(default_factory=list)
-    prompt: str | None = None
-    images: list[str] = Field(default_factory=list)
+    model: str | None = Field(default=None, max_length=128, pattern=r"^[a-zA-Z0-9_\-\.:/]+$")
+    messages: list[ChatMessagePayload] = Field(default_factory=list, max_length=100)
+    prompt: str | None = Field(default=None, max_length=131072)
+    images: list[str] = Field(default_factory=list, max_length=10)
     think: bool = False
+
+    model_config = ConfigDict(extra="ignore")
