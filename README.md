@@ -1,34 +1,22 @@
-# 🌌 Nova Console
+# Nova Console
 
-[![100% Offline Localhost](https://img.shields.io/badge/Network-100%25%20Offline-success?style=flat-square)](https://github.com/ad4rshp/nova-console)
-[![Zero Telemetry](https://img.shields.io/badge/Telemetry-Zero-blue?style=flat-square)](https://github.com/ad4rshp/nova-console)
-[![License: MIT](https://img.shields.io/badge/License-MIT-green?style=flat-square)](LICENSE)
-[![No Login](https://img.shields.io/badge/Account-No%20Login-orange?style=flat-square)](https://github.com/ad4rshp/nova-console)
-
-**Nova Console** is an open-source local AI workstation, hardware telemetry monitor, and usage-tracking proxy. Monitor GPU/VRAM load in real time, tune context with 1-click hardware presets, chat with local models, and track token usage from Cursor and Continue.
-
-Works on **Windows, macOS, and Linux** with **Ollama, LM Studio, vLLM, and LocalAI**.
+Local hardware monitor, web UI, and OpenAI-compatible proxy for local LLM backends (Ollama, LM Studio, vLLM, LocalAI).
 
 ![Nova Console Dashboard](docs/screenshots/dashboard_overview.png)
 
----
-
-## Quickstart
+## Installation
 
 ### Windows
-Run in PowerShell (no Git or manual setup required):
 ```powershell
 irm https://raw.githubusercontent.com/ad4rshp/nova-console/main/setup_windows.bat -OutFile setup.bat; .\setup.bat
 ```
-*Or download the **[Source Zip](https://github.com/ad4rshp/nova-console/archive/refs/heads/main.zip)**, extract, and double-click `setup_windows.bat`.*
 
 ### macOS & Linux
-Run in Terminal:
 ```bash
 curl -fsSL https://raw.githubusercontent.com/ad4rshp/nova-console/main/setup_unix.sh | bash
 ```
 
-### From Source (All Platforms)
+### Manual
 ```bash
 git clone https://github.com/ad4rshp/nova-console.git
 cd nova-console
@@ -36,46 +24,21 @@ pip install -r requirements.txt
 python launch.py
 ```
 
-*Pre-compiled standalone `.exe` binaries are also available on [GitHub Releases](https://github.com/ad4rshp/nova-console/releases).*
+## Features
 
----
+- **Hardware Monitoring**: Real-time GPU VRAM, temperature, RAM, and disk metrics.
+- **Context Presets**: Context profiles (2K, 4K, 8K) to manage VRAM allocation.
+- **Proxy & Metrics**: OpenAI-compatible endpoint (`/v1`) logging latency, tokens/sec, and token counts to SQLite.
+- **Web Chat**: Chat interface with model switching, system prompts, parameter tuning, and terminal execution with approval confirmation.
 
-## 🛡️ Trust & Security Hardening
+## OpenAI-Compatible Proxy (`/v1`)
 
-* **Strict Localhost (`127.0.0.1`)**: Binds strictly to local loopback by default. Remote/LAN access is rejected unless explicitly enabled via `NOVA_ALLOW_LAN=1`. Any attempt to bind to a non-loopback address without this flag fails startup with an explicit security violation.
-* **Server-Side User Authorization**: Command execution requires both a single-use cryptographic approval token (60s TTL) AND verified server-side user authorization (`NOVA_ADMIN_KEY` or persistent session credential). Token issuance alone cannot trigger execution.
-* **LAN Mode Authentication**: When `NOVA_ALLOW_LAN=1` is enabled, all sensitive administrative routes (`/api/terminal/*`, `/api/modelfile`, `/api/settings`, etc.) require cryptographic token authentication (`Authorization: Bearer <key>` or `X-Nova-Auth`).
-* **Path Confinement & Catastrophic Blocking**: Command working directories are strictly constrained within the workspace directory, blocking path traversal and symlink escapes. Destructive system commands are automatically blocked.
-* **Zero Telemetry & 100% Offline Core**: Local model inference and hardware monitoring are 100% offline. No analytics, tracking pixels, or accounts.
-* **Security Headers & CSRF Defense**: Enforces strict origin checking on state-changing API endpoints and standard defensive security headers (`nosniff`, `SAMEORIGIN`, `strict-origin-when-cross-origin`).
-
-![Trust & Privacy Transparency](docs/screenshots/trust_privacy_modal.png)
-
----
-
-## ✨ Features
-
-* **Real-Time VRAM & Hardware Telemetry**: Live GPU VRAM, temperature, RAM usage, and disk headroom with sparklines.
-* **CPU/GPU Split Offload Alerts**: Detects when large models spill from VRAM into slower system RAM and suggests optimal context size.
-* **1-Click Hardware Presets**:
-  * **Low (2K)**: For integrated graphics / <6 GB VRAM (prevents paging).
-  * **Medium (4K)**: Balanced everyday coding profile (6–8 GB VRAM).
-  * **High (8K)**: Deep reasoning profile for 12+ GB VRAM.
-* **Interactive Chat Drawer**: Multimodal chat (images & voice), code execution sandbox with 1-click **Run Python**, and thinking reasoning viewer.
-* **Zero-RAM Update Checker**: Header lights up when a new version is released on GitHub with 0 MB idle RAM footprint.
-
-![Nova Chat Interface](docs/screenshots/chat_interface.png)
-
----
-
-## 🔌 Connect Cursor, Continue, or Python
-
-Route any OpenAI-compatible client through Nova Console (`http://127.0.0.1:8080/v1`) to track tokens/sec, latency, and request logs in SQLite:
+Point OpenAI-compatible tools to `http://127.0.0.1:8080/v1` (API key: `nova-local` or your `NOVA_ADMIN_KEY`).
 
 ### Cursor
-Set **Override OpenAI Base URL** to `http://127.0.0.1:8080/v1`, enter dummy key `nova-local`, and pick your installed model (e.g. `llama3.2:latest`).
+Set **Override OpenAI Base URL** to `http://127.0.0.1:8080/v1`.
 
-### Continue.dev (`config.json`)
+### Continue (`config.json`)
 ```json
 {
   "models": [{
@@ -91,35 +54,38 @@ Set **Override OpenAI Base URL** to `http://127.0.0.1:8080/v1`, enter dummy key 
 ### Python
 ```python
 from openai import OpenAI
+
 client = OpenAI(base_url="http://127.0.0.1:8080/v1", api_key="nova-local")
-response = client.chat.completions.create(model="llama3.2:latest", messages=[{"role": "user", "content": "Hello!"}])
+response = client.chat.completions.create(
+    model="llama3.2:latest",
+    messages=[{"role": "user", "content": "Hello"}]
+)
 print(response.choices[0].message.content)
 ```
 
----
+## Configuration
 
-## ⚙️ Configuration (`.env`)
+Set environment variables or use a `.env` file:
 
-*Works out of the box with zero configuration.* To customize your instance, create a `.env` file in the root directory:
+| Variable | Default | Description |
+| :--- | :--- | :--- |
+| `NOVA_HOST` | `127.0.0.1` | Bind address. Non-loopback addresses require `NOVA_ALLOW_LAN=1`. |
+| `NOVA_PORT` | `8080` | Port for web UI and proxy. |
+| `NOVA_ALLOW_LAN` | `0` | Set to `1` to allow non-loopback binding. Enforces authentication on sensitive routes. |
+| `NOVA_ADMIN_KEY` | *(auto-generated)* | Admin key for authenticated routes and terminal execution. |
+| `NOVA_REQUIRE_AUTH` | `0` | Set to `1` to enforce authentication on loopback as well. |
+| `NOVA_DISABLE_TERMINAL` | `0` | Set to `1` to disable terminal command execution. |
+| `NOVA_BACKEND_URL` | `http://127.0.0.1:11434` | Backend LLM server URL (Ollama, LM Studio, vLLM). |
+| `NOVA_NO_BROWSER` | `0` | Set to `1` to prevent opening the browser on launch. |
+| `NOVA_CHECK_UPDATES` | `1` | Set to `0` to disable GitHub release check. |
 
-```ini
-# Core Configuration
-NOVA_HOST=127.0.0.1                     # Strict loopback binding (Default: 127.0.0.1)
-NOVA_PORT=8080                          # Dashboard port (Default: 8080)
-NOVA_ALLOW_LAN=0                        # Set to 1 to permit non-loopback / LAN binding (Mandatory for non-loopback)
-NOVA_ADMIN_KEY=your-secure-admin-token  # Custom admin token (auto-generated if omitted)
-NOVA_REQUIRE_AUTH=0                     # Set to 1 to enforce authentication even on localhost
-NOVA_DISABLE_TERMINAL=0                 # Set to 1 to completely disable terminal execution
-NOVA_BACKEND_URL=http://127.0.0.1:11434   # Ollama: 11434 | LM Studio: 1234 | vLLM: 8000
-NOVA_NO_BROWSER=0                       # Set to 1 to disable auto-opening browser on launch
-NOVA_CHECK_UPDATES=1                    # Set to 0 to completely disable passive GitHub release check
-NOVA_LOG_LEVEL=INFO                     # Logging verbosity: DEBUG, INFO, WARNING, ERROR
-```
+## Security
 
-> [!WARNING]
-> Setting `NOVA_ALLOW_LAN=1` binds Nova Console to `0.0.0.0`, making the dashboard and proxy accessible to your local network. Only enable this on secure, trusted networks.
+- **Loopback Default**: Binds to `127.0.0.1`. Non-loopback addresses fail startup unless `NOVA_ALLOW_LAN=1` is set.
+- **Terminal Execution**: Requires single-use server approval token, server-side user authorization, and execution within the workspace directory. Catastrophic commands are blocked.
+- **LAN Protection**: When `NOVA_ALLOW_LAN=1` is enabled, sensitive endpoints (`/api/terminal/*`, `/api/modelfile`, `/api/settings`) require `Authorization: Bearer <token>` or `X-Nova-Auth`.
+- **Browser Protection**: CSRF origin checking on mutating endpoints and security headers (`nosniff`, `SAMEORIGIN`).
 
----
+## License
 
-## 📄 License
-MIT License. Free and open source forever.
+MIT
