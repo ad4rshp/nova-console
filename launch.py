@@ -19,16 +19,22 @@ if sys.version_info < (3, 10):
 BASE_DIR = Path(__file__).resolve().parent
 sys.path.insert(0, str(BASE_DIR))
 
-from app.config import PORT, HOST, LLM_BACKEND_URL
+from app.config import PORT, HOST, LLM_BACKEND_URL, NOVA_ALLOW_LAN
 import uvicorn
 
 def main():
     print("=" * 60)
     print("  🚀 Starting Nova Console (Local AI Workstation)")
+    print(f"  • Network Binding:    {HOST}:{PORT}")
     print(f"  • Local Dashboard:    http://127.0.0.1:{PORT}")
     print(f"  • API Proxy Gateway:  http://127.0.0.1:{PORT}/v1")
     print(f"  • Interactive Docs:   http://127.0.0.1:{PORT}/docs")
     print(f"  • Inference Backend:  {LLM_BACKEND_URL}")
+    if NOVA_ALLOW_LAN or HOST in ("0.0.0.0", "::"):
+        print("  ⚠️  WARNING: LAN access is ENABLED (0.0.0.0).")
+        print("      Anyone on your local network can reach your dashboard.")
+    else:
+        print("  🛡️  Loopback Isolation: 127.0.0.1 (Localhost Only)")
     print("=" * 60)
 
     # Optional: open browser after brief delay

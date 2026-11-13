@@ -8,12 +8,20 @@ def get_db() -> sqlite3.Connection:
     conn = sqlite3.connect(str(DB_PATH), timeout=15.0)
     conn.execute("PRAGMA journal_mode=WAL;")
     conn.execute("PRAGMA synchronous=NORMAL;")
+    conn.execute("PRAGMA busy_timeout=5000;")
     conn.row_factory = sqlite3.Row
     return conn
 
 def init_db() -> None:
     with get_db() as conn:
         cursor = conn.cursor()
+        # Schema version tracking
+        cursor.execute("""
+            CREATE TABLE IF NOT EXISTS schema_version (
+                version INTEGER PRIMARY KEY,
+                applied_at DATETIME DEFAULT CURRENT_TIMESTAMP
+            );
+        """)
         # 1. Settings Table
         cursor.execute("""
             CREATE TABLE IF NOT EXISTS settings (
@@ -89,7 +97,8 @@ def init_db() -> None:
         cursor.execute("""
             CREATE TABLE IF NOT EXISTS chat_history (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
-                timestamp DATETIME DEFAULT CURRENT_TIMESTAMP,
+                timestamp REAL DEFAULT 0,
+                iso_time TEXT DEFAULT '',
                 role TEXT NOT NULL,
                 content TEXT NOT NULL,
                 thinking TEXT DEFAULT '',
@@ -98,11 +107,19 @@ def init_db() -> None:
             );
         """)
 
-        # Migration: ensure images exists if table was created in an earlier build
-        try:
-            cursor.execute("ALTER TABLE chat_history ADD COLUMN images TEXT DEFAULT '';")
-        except Exception:
-            pass
+        # Migration: ensure iso_time and images exist if table was created in an earlier build
+        cursor.execute("PRAGMA table_info(chat_history);")
+        chat_cols = {row["name"] for row in cursor.fetchall()}
+        if "iso_time" not in chat_cols:
+            try:
+                cursor.execute("ALTER TABLE chat_history ADD COLUMN iso_time TEXT DEFAULT '';")
+            except Exception:
+                pass
+        if "images" not in chat_cols:
+            try:
+                cursor.execute("ALTER TABLE chat_history ADD COLUMN images TEXT DEFAULT '';")
+            except Exception:
+                pass
 
         # 5. Terminal Command Audit Log Table (With permission status)
         cursor.execute("""
@@ -258,12 +275,14 @@ def db_save_chat_message(role: str, content: str, thinking: str, model: str, ima
     if not settings.get("save_chat_history", False):
         return
     images_str = json.dumps(images) if images else ""
+    now = time.time()
+    iso_now = time.strftime("%Y-%m-%d %H:%M:%S")
     with get_db() as conn:
         cursor = conn.cursor()
         cursor.execute("""
-            INSERT INTO chat_history (role, content, thinking, model, images)
-            VALUES (?, ?, ?, ?, ?);
-        """, (role, content, thinking, model, images_str))
+            INSERT INTO chat_history (timestamp, iso_time, role, content, thinking, model, images)
+            VALUES (?, ?, ?, ?, ?, ?, ?);
+        """, (now, iso_now, role, content, thinking, model, images_str))
         conn.commit()
 
 def db_get_chat_history(limit: int = 100) -> list[dict[str, Any]]:

@@ -2,7 +2,7 @@
 #define MyAppName "Nova Console"
 #define MyAppVersion "2.1.0"
 #define MyAppPublisher "Nova Console Team"
-#define MyAppURL "https://github.com/nova-console/nova-console"
+#define MyAppURL "https://github.com/ad4rshp/nova-console"
 #define MyAppExeName "NovaConsole.exe"
 
 [Setup]

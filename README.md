@@ -42,11 +42,12 @@ python launch.py
 
 ## 🛡️ Trust & Privacy Guarantee
 
-* **100% Offline (`127.0.0.1`)**: Binds strictly to local loopback. No open LAN ports, no cloud dependencies.
+* **Strict Localhost (`127.0.0.1`)**: Binds strictly to local loopback by default. Remote/LAN access is rejected unless explicitly enabled via `NOVA_ALLOW_LAN=1`.
 * **Zero Telemetry**: No analytics, no tracking pixels, no user fingerprinting, and no account required.
-* **100% Auditable Code**: Pure unminified Python (FastAPI) and modern JavaScript.
-* **Zero Background RAM**: When closed, it exits completely. No background daemons or hidden tray miners.
-* **Terminal Sandbox**: Nova Chat can propose commands, but **never** runs them without your explicit approval modal.
+* **100% Offline Core**: Local model inference and hardware monitoring are 100% offline. An optional passive GitHub version check runs on dashboard startup (toggleable via `NOVA_CHECK_UPDATES=0`).
+* **Cryptographic Terminal Execution**: Command execution requires a server-side single-use cryptographic approval token (60s TTL), path confinement strictly within the workspace directory, and automatic blocking of catastrophic system commands.
+* **Zero Background RAM**: When closed, it exits completely. No background daemons or hidden miners.
+* **Security Headers & CSRF Defense**: Enforces strict origin checking on state-changing API endpoints and standard defensive security headers (`nosniff`, `SAMEORIGIN`).
 
 ![Trust & Privacy Transparency](docs/screenshots/trust_privacy_modal.png)
 
@@ -99,13 +100,21 @@ print(response.choices[0].message.content)
 
 ## ⚙️ Configuration (`.env`)
 
-*Works out of the box with zero configuration.* To change defaults, create a `.env` file:
+*Works out of the box with zero configuration.* To customize your instance, create a `.env` file in the root directory:
 
 ```ini
+# Core Configuration
+NOVA_HOST=127.0.0.1                     # Strict loopback binding (Default: 127.0.0.1)
+NOVA_PORT=8080                          # Dashboard port (Default: 8080)
+NOVA_ALLOW_LAN=0                        # Set to 1 ONLY to allow external LAN access (Warning: exposes API)
 NOVA_BACKEND_URL=http://127.0.0.1:11434   # Ollama: 11434 | LM Studio: 1234 | vLLM: 8000
-NOVA_PORT=8080                          # Dashboard port
-NOVA_NO_BROWSER=0                       # Set to 1 to disable auto-opening browser
+NOVA_NO_BROWSER=0                       # Set to 1 to disable auto-opening browser on launch
+NOVA_CHECK_UPDATES=1                    # Set to 0 to completely disable passive GitHub release check
+NOVA_LOG_LEVEL=INFO                     # Logging verbosity: DEBUG, INFO, WARNING, ERROR
 ```
+
+> [!WARNING]
+> Setting `NOVA_ALLOW_LAN=1` binds Nova Console to `0.0.0.0`, making the dashboard and proxy accessible to your local network. Only enable this on secure, trusted networks.
 
 ---
 

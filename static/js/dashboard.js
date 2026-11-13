@@ -678,8 +678,10 @@
         let imgHtml = '';
         if (msg.images && msg.images.length) {
           imgHtml = `<div class="msg-images-grid">` + msg.images.map(img => {
-            const src = img.startsWith('data:') ? img : `data:image/jpeg;base64,${img}`;
-            return `<img src="${src}" class="msg-img-thumb" alt="Attachment" onclick="window.open('${src}')">`;
+            // Validate image protocol and sanitize
+            const rawSrc = img.startsWith('data:image/') ? img : `data:image/jpeg;base64,${img}`;
+            const safeSrc = rawSrc.replace(/"/g, '&quot;').replace(/'/g, '&#39;');
+            return `<img src="${safeSrc}" class="msg-img-thumb" alt="Attachment" data-src="${safeSrc}" onclick="previewAttachmentImage(this)">`;
           }).join('') + `</div>`;
         }
         contentHtml = `${imgHtml}<div class="msg-bubble">${formatMarkdown(msg.content)}</div>`;
@@ -1266,8 +1268,21 @@
 
   document.querySelector('#rebuildBtn').addEventListener('click', openRebuildModal);
 
-  // System Terminal Command Execution Flow (Permission-Gated)
+  function previewAttachmentImage(el) {
+    const src = el.getAttribute('data-src');
+    if (src && src.startsWith('data:image/')) {
+      const w = window.open('');
+      if (w) {
+        w.document.write(`<img src="${src}" style="max-width:100%; height:auto; display:block; margin:auto;" alt="Attachment">`);
+        w.document.title = 'Attachment Preview';
+      }
+    }
+  }
+  window.previewAttachmentImage = previewAttachmentImage;
+
+  // System Terminal Command Execution Flow (Cryptographic Server-Authorized)
   let pendingCommandToRun = null;
+  let pendingApprovalToken = null;
 
   async function requestCommandExecution(btn) {
     let cmd = btn.getAttribute('data-cmd');
@@ -1281,28 +1296,42 @@
 
   async function openCommandApproval(cmd) {
     pendingCommandToRun = cmd;
+    pendingApprovalToken = null;
+
     const modal = document.querySelector('#cmdApprovalModal');
     const codeEl = document.querySelector('#cmdModalCode');
     const badgeEl = document.querySelector('#cmdRiskBadge');
     const warnEl = document.querySelector('#cmdRiskWarning');
+    const confirmBtn = document.querySelector('#cmdConfirmRunBtn');
 
     codeEl.textContent = cmd;
     badgeEl.textContent = 'Analyzing…';
     badgeEl.className = 'neu-pill';
-    warnEl.textContent = 'Checking command safety with server…';
+    warnEl.textContent = 'Requesting cryptographic execution approval from server…';
+    if (confirmBtn) confirmBtn.disabled = true;
     modal.style.display = 'flex';
 
     try {
       const res = await postJson('/api/terminal/propose', { command: cmd });
+      if (res.approval_token) {
+        pendingApprovalToken = res.approval_token;
+      }
       if (res.risk) {
         badgeEl.textContent = `${res.risk} RISK`;
         badgeEl.className = res.risk === 'CRITICAL' ? 'neu-pill bad' : res.risk === 'HIGH' ? 'neu-pill bad' : res.risk === 'LOW' ? 'neu-pill ok' : 'neu-pill';
         warnEl.textContent = res.warning || '';
         warnEl.style.color = res.color || 'var(--ink)';
       }
+      if (res.blocked) {
+        warnEl.textContent = `🚫 BLOCKED: ${res.warning}`;
+        warnEl.style.color = '#ef4444';
+        if (confirmBtn) confirmBtn.disabled = true;
+      } else if (confirmBtn) {
+        confirmBtn.disabled = false;
+      }
     } catch (_) {
-      badgeEl.textContent = 'USER REVIEW';
-      warnEl.textContent = 'Ensure this command is safe before approving.';
+      badgeEl.textContent = 'REVIEW';
+      warnEl.textContent = 'Could not retrieve server token. Execution will be blocked.';
     }
   }
 
@@ -1310,11 +1339,16 @@
     const modal = document.querySelector('#cmdApprovalModal');
     if (modal) modal.style.display = 'none';
     pendingCommandToRun = null;
+    pendingApprovalToken = null;
   }
 
   async function confirmCmdExecution() {
-    if (!pendingCommandToRun) return;
+    if (!pendingCommandToRun || !pendingApprovalToken) {
+      showToast({ title: 'Authorization Missing', message: 'Cryptographic approval token is required from server.', type: 'error' });
+      return;
+    }
     const cmd = pendingCommandToRun;
+    const token = pendingApprovalToken;
     closeCmdApprovalModal();
 
     showToast({ title: 'Running Command', message: `Executing: ${cmd.slice(0, 40)}…`, type: 'info', duration: 3500 });
@@ -1327,10 +1361,20 @@
     renderChatMessages();
 
     try {
-      const res = await postJson('/api/terminal/execute', { command: cmd, approved: true });
+      const res = await postJson('/api/terminal/execute', { command: cmd, approval_token: token, approved: true });
+      if (res.error) {
+        chatHistory[assistantIndex] = {
+          role: 'assistant',
+          content: `⚠️ **Execution Blocked:** ${res.error}`
+        };
+        renderChatMessages();
+        showToast({ title: 'Execution Blocked', message: res.error, type: 'error', duration: 7000 });
+        return;
+      }
+
       const statusEmoji = res.ok ? '✓' : '⚠️';
       const outputText = res.output ? res.output.trim() : '(Command completed with no output)';
-      
+
       chatHistory[assistantIndex] = {
         role: 'assistant',
         content: `### ${statusEmoji} Command: \`${cmd}\`\n- **Status:** ${res.ok ? 'Success' : 'Failed (Exit Code: ' + res.return_code + ')'}\n- **Duration:** ${res.execution_time_s}s\n- **Target Directory:** \`${res.working_dir || 'Project Root'}\`\n\n\`\`\`terminal\n${outputText}\n\`\`\``

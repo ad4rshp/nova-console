@@ -1,16 +1,27 @@
 import json
+import os
 import time
 from contextlib import asynccontextmanager
 from typing import Any, AsyncGenerator
+from urllib.parse import urlparse
 
 import httpx
 from fastapi import FastAPI, Request, Response, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import HTMLResponse, StreamingResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
+from starlette.middleware.base import BaseHTTPMiddleware
 
-from app.config import STATIC_DIR, BASE_DIR, LLM_BACKEND_URL, DEFAULT_MODEL
+from app.config import (
+    STATIC_DIR,
+    BASE_DIR,
+    LLM_BACKEND_URL,
+    DEFAULT_MODEL,
+    PORT,
+    HOST,
+    NOVA_ALLOW_LAN,
+)
 from app.database import (
     init_db,
     db_get_settings,
@@ -25,29 +36,86 @@ from app.database import (
 from app.services.hardware import get_ram_stats, get_gpu_stats, get_storage_stats
 from app.services.modelfile import read_modelfile, update_modelfile, rebuild_nova_model, evict_model_vram
 from app.services.llm_engine import get_dashboard_state
-from app.services.terminal import assess_command_risk, run_system_command
+from app.services.terminal import (
+    assess_command_risk,
+    generate_approval_token,
+    run_system_command,
+    validate_working_dir,
+)
 from app.services.updater import check_for_updates
+
+# Hop-by-hop headers to strip during HTTP proxying
+HOP_BY_HOP_HEADERS = {
+    "connection",
+    "keep-alive",
+    "proxy-authenticate",
+    "proxy-authorization",
+    "te",
+    "trailers",
+    "transfer-encoding",
+    "upgrade",
+    "host",
+    "content-length"
+}
+
+def get_allowed_origins() -> list[str]:
+    origins = [
+        f"http://127.0.0.1:{PORT}",
+        f"http://localhost:{PORT}",
+        "http://127.0.0.1",
+        "http://localhost",
+    ]
+    custom = os.environ.get("NOVA_CORS_ORIGINS", "")
+    if custom:
+        for c in custom.split(","):
+            if c.strip():
+                origins.append(c.strip())
+    return origins
+
+class SecurityHeadersMiddleware(BaseHTTPMiddleware):
+    async def dispatch(self, request: Request, call_next):
+        # Origin & CSRF Protection on state-changing API endpoints
+        if request.method in ("POST", "PUT", "DELETE", "PATCH") and request.url.path.startswith("/api/"):
+            origin = request.headers.get("origin") or request.headers.get("referer")
+            if origin:
+                parsed = urlparse(origin)
+                origin_host = parsed.hostname or ""
+                # Reject external/cross-origin requests attempting to manipulate local state
+                if origin_host not in ("127.0.0.1", "localhost", "::1") and not NOVA_ALLOW_LAN:
+                    return JSONResponse(
+                        status_code=403,
+                        content={"error": "Cross-Origin / CSRF security rejection: unauthorized request origin."}
+                    )
+
+        response = await call_next(request)
+        response.headers["X-Content-Type-Options"] = "nosniff"
+        response.headers["X-Frame-Options"] = "SAMEORIGIN"
+        response.headers["Referrer-Policy"] = "strict-origin-when-cross-origin"
+        response.headers["Permissions-Policy"] = "camera=(), microphone=(self), geolocation=()"
+        return response
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    # Initialize SQLite database on startup
+    # Initialize SQLite database and run versioned migrations
     init_db()
     yield
 
 app = FastAPI(
     title="Nova Console API",
     description="Neumorphic Local AI Workstation & Universal LLM Proxy",
-    version="2.0.0",
+    version="2.1.0",
     lifespan=lifespan
 )
 
+# Strict CORS: Only local loopback origins (unless configured via NOVA_CORS_ORIGINS)
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],
+    allow_origins=get_allowed_origins(),
     allow_credentials=True,
-    allow_methods=["*"],
+    allow_methods=["GET", "POST", "PUT", "DELETE", "OPTIONS"],
     allow_headers=["*"],
 )
+app.add_middleware(SecurityHeadersMiddleware)
 
 # Mount Static Assets Directory (/static/css, /static/js)
 static_path = STATIC_DIR / "static"
@@ -73,15 +141,17 @@ class ModelfilePayload(BaseModel):
     repeat_penalty: float | int | str | None = None
 
 class UnloadPayload(BaseModel):
-    model: str
+    model: str = Field(..., max_length=128)
 
 class ProposeCommandPayload(BaseModel):
-    command: str
+    command: str = Field(..., max_length=4096)
+    working_dir: str | None = None
 
 class ExecuteCommandPayload(BaseModel):
-    command: str
+    command: str = Field(..., max_length=4096)
     working_dir: str | None = None
-    approved: bool
+    approval_token: str = Field(..., min_length=16, max_length=128)
+    approved: bool | None = None
 
 # --- Frontend HTML Delivery ---
 @app.get("/", response_class=HTMLResponse)
@@ -149,17 +219,28 @@ async def unload_endpoint(payload: UnloadPayload):
     except Exception as exc:
         return JSONResponse(status_code=500, content={"ok": False, "error": str(exc)})
 
-# --- Terminal Command Execution Endpoints ---
+# --- Terminal Command Execution Endpoints with Cryptographic Token Authorization ---
 @app.post("/api/terminal/propose")
 async def propose_terminal_command(payload: ProposeCommandPayload):
-    assessment = assess_command_risk(payload.command)
-    return {"command": payload.command, **assessment}
+    token_data = generate_approval_token(payload.command, working_dir=payload.working_dir)
+    return token_data
 
 @app.post("/api/terminal/execute")
 async def execute_terminal_command(payload: ExecuteCommandPayload):
-    if not payload.approved:
-        return JSONResponse(status_code=403, content={"ok": False, "error": "Execution declined: user approval required."})
-    return run_system_command(payload.command, working_dir=payload.working_dir, approved=True)
+    if not payload.approval_token:
+        return JSONResponse(
+            status_code=403,
+            content={"ok": False, "error": "Execution declined: cryptographic server approval token required."}
+        )
+
+    result = run_system_command(
+        payload.command,
+        working_dir=payload.working_dir,
+        approval_token=payload.approval_token
+    )
+    if not result.get("ok") and result.get("return_code") == 403:
+        return JSONResponse(status_code=403, content=result)
+    return result
 
 # --- Streaming Chat with Local Engine ---
 @app.post("/api/dashboard-chat")
@@ -171,13 +252,19 @@ async def dashboard_chat(request: Request):
     if not messages and "prompt" in payload:
         messages = [{"role": "user", "content": payload["prompt"]}]
 
-    if images and messages and messages[-1].get("role") == "user":
-        messages[-1]["images"] = images
+    # Validate image payloads
+    valid_images = []
+    for img in images:
+        if isinstance(img, str) and (img.startswith("data:image/") or len(img) < 15 * 1024 * 1024):
+            valid_images.append(img)
+
+    if valid_images and messages and messages[-1].get("role") == "user":
+        messages[-1]["images"] = valid_images
 
     think = bool(payload.get("think", False))
 
     if messages and messages[-1].get("role") == "user":
-        db_save_chat_message("user", messages[-1].get("content", ""), "", model, images=images)
+        db_save_chat_message("user", messages[-1].get("content", ""), "", model, images=valid_images)
 
     async def stream_generator() -> AsyncGenerator[str, None]:
         start_time = time.perf_counter()
@@ -195,7 +282,6 @@ async def dashboard_chat(request: Request):
 
         async with httpx.AsyncClient(timeout=httpx.Timeout(180.0, connect=8.0)) as client:
             try:
-                # Native /api/chat with instant health check
                 chat_url = f"{LLM_BACKEND_URL}/api/chat"
                 async with client.stream("POST", chat_url, json=ollama_req) as response:
                     if response.status_code != 200:
@@ -256,18 +342,30 @@ async def dashboard_chat(request: Request):
 
     return StreamingResponse(stream_generator(), media_type="application/x-ndjson")
 
-# --- Universal LLM Proxy Endpoints (OpenAI-Compatible & Native) ---
+# --- Universal OpenAI-Compatible API Proxy (/v1/) with Usage Tracking ---
 @app.api_route("/v1/{path:path}", methods=["GET", "POST", "PUT", "DELETE"])
-@app.api_route("/api/{path:path}", methods=["GET", "POST", "PUT", "DELETE"])
-async def proxy_backend(path: str, request: Request):
-    full_path = request.url.path
-    target_url = f"{LLM_BACKEND_URL}{full_path}"
-    headers = {k: v for k, v in request.headers.items() if k.lower() not in {"host", "content-length", "connection"}}
+async def proxy_v1(path: str, request: Request):
+    target_url = f"{LLM_BACKEND_URL}/v1/{path}"
+    headers = {
+        k: v for k, v in request.headers.items()
+        if k.lower() not in HOP_BY_HOP_HEADERS
+    }
 
     body = await request.body()
     start_time = time.perf_counter()
 
-    async with httpx.AsyncClient(timeout=180.0) as client:
+    is_chat = path.startswith("chat/completions") or path.startswith("completions")
+    req_json: dict[str, Any] = {}
+    if is_chat and body:
+        try:
+            req_json = json.loads(body)
+        except Exception:
+            pass
+
+    model_name = req_json.get("model", "default")
+    is_stream = bool(req_json.get("stream", False))
+
+    async with httpx.AsyncClient(timeout=httpx.Timeout(180.0, connect=10.0)) as client:
         try:
             req = client.build_request(
                 method=request.method,
@@ -275,17 +373,107 @@ async def proxy_backend(path: str, request: Request):
                 headers=headers,
                 content=body
             )
-            response = await client.send(req, stream=True)
+            response = await client.send(req, stream=is_stream)
 
-            async def proxy_stream():
-                async for chunk in response.aiter_bytes():
-                    yield chunk
+            res_headers = {
+                k: v for k, v in response.headers.items()
+                if k.lower() not in HOP_BY_HOP_HEADERS
+            }
+
+            if not is_stream:
+                content = await response.aread()
+                duration = time.perf_counter() - start_time
+                status_code = response.status_code
+
+                # Usage tracking for non-streaming completions
+                if is_chat and status_code == 200:
+                    prompt_tokens = 0
+                    completion_tokens = 0
+                    try:
+                        res_json = json.loads(content)
+                        usage = res_json.get("usage", {})
+                        prompt_tokens = usage.get("prompt_tokens", 0)
+                        completion_tokens = usage.get("completion_tokens", 0)
+                    except Exception:
+                        pass
+
+                    if not prompt_tokens and "messages" in req_json:
+                        prompt_tokens = len(str(req_json["messages"])) // 4
+                    if not completion_tokens:
+                        completion_tokens = len(content) // 4
+
+                    tps = round(completion_tokens / duration, 1) if duration > 0 and completion_tokens > 0 else 0.0
+                    try:
+                        db_record_request(
+                            endpoint=f"/v1/{path}",
+                            model=model_name,
+                            prompt_tokens=prompt_tokens,
+                            completion_tokens=completion_tokens,
+                            latency_s=round(duration, 2),
+                            tps=tps,
+                            status_code=status_code
+                        )
+                    except Exception:
+                        pass
+
+                return Response(
+                    content=content,
+                    status_code=status_code,
+                    headers=res_headers
+                )
+
+            # Streaming response handling
+            prompt_tokens_est = len(str(req_json.get("messages", ""))) // 4 if "messages" in req_json else 0
+
+            async def streaming_wrapper():
+                out_tokens = 0
+                exact_prompt_tokens = prompt_tokens_est
+                try:
+                    async for chunk in response.aiter_bytes():
+                        yield chunk
+                        chunk_str = chunk.decode("utf-8", errors="ignore")
+                        for line in chunk_str.split("\n"):
+                            line = line.strip()
+                            if line.startswith("data: ") and line != "data: [DONE]":
+                                try:
+                                    cdata = json.loads(line[6:])
+                                    if "usage" in cdata and cdata["usage"]:
+                                        exact_prompt_tokens = cdata["usage"].get("prompt_tokens", exact_prompt_tokens)
+                                        out_tokens = cdata["usage"].get("completion_tokens", out_tokens)
+                                    elif "choices" in cdata and cdata["choices"]:
+                                        delta = cdata["choices"][0].get("delta", {})
+                                        if delta.get("content"):
+                                            out_tokens += max(1, len(delta["content"]) // 4)
+                                except Exception:
+                                    pass
+                finally:
+                    await response.aclose()
+                    duration = time.perf_counter() - start_time
+                    tps = round(out_tokens / duration, 1) if duration > 0 and out_tokens > 0 else 0.0
+                    if is_chat:
+                        try:
+                            db_record_request(
+                                endpoint=f"/v1/{path}",
+                                model=model_name,
+                                prompt_tokens=exact_prompt_tokens,
+                                completion_tokens=out_tokens,
+                                latency_s=round(duration, 2),
+                                tps=tps,
+                                status_code=response.status_code
+                            )
+                        except Exception:
+                            pass
 
             return StreamingResponse(
-                proxy_stream(),
+                streaming_wrapper(),
                 status_code=response.status_code,
-                headers=dict(response.headers)
+                headers=res_headers
+            )
+
+        except httpx.ConnectError:
+            return JSONResponse(
+                status_code=502,
+                content={"error": f"Bad Gateway: Unable to connect to inference backend at {LLM_BACKEND_URL}. Ensure your engine is running."}
             )
         except Exception as exc:
             return JSONResponse(status_code=502, content={"error": f"LLM backend gateway error: {str(exc)}"})
-

@@ -18,8 +18,26 @@ if not MODELFILE_PATH.exists() and (BASE_DIR / "Modelfile").exists():
 TEMPLATES_DIR = (BUNDLE_DIR if getattr(sys, "frozen", False) and hasattr(sys, "_MEIPASS") else BASE_DIR) / "app" / "templates"
 
 # Network & Service Configuration
-PORT = int(os.environ.get("NOVA_PORT", os.environ.get("PORT", 8080)))
-HOST = os.environ.get("NOVA_HOST", "0.0.0.0")
+# Security Rule: Default to 127.0.0.1 (Localhost Only).
+# LAN exposure requires explicit opt-in via NOVA_ALLOW_LAN=1.
+NOVA_ALLOW_LAN = os.environ.get("NOVA_ALLOW_LAN", "0").lower() in ("1", "true", "yes")
+
+_env_host = os.environ.get("NOVA_HOST", "").strip()
+if _env_host:
+    if _env_host in ("0.0.0.0", "::") and not NOVA_ALLOW_LAN:
+        # Prevent accidental LAN exposure unless explicitly permitted
+        HOST = "127.0.0.1"
+    else:
+        HOST = _env_host
+else:
+    HOST = "0.0.0.0" if NOVA_ALLOW_LAN else "127.0.0.1"
+
+try:
+    PORT = int(os.environ.get("NOVA_PORT", os.environ.get("PORT", 8080)))
+    if not (1 <= PORT <= 65535):
+        PORT = 8080
+except (ValueError, TypeError):
+    PORT = 8080
 
 # Universal Inference Engine (Ollama: 11434, LM Studio: 1234, vLLM: 8000, LocalAI: 8080, custom OpenAI endpoint)
 LLM_BACKEND_URL = os.environ.get("NOVA_BACKEND_URL", os.environ.get("LLM_BACKEND_URL", os.environ.get("OLLAMA_HOST", "http://127.0.0.1:11434"))).rstrip("/")
