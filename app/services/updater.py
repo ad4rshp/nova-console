@@ -25,7 +25,7 @@ async def check_for_updates(force: bool = False) -> dict[str, Any]:
     if not CHECK_UPDATES:
         return {"enabled": False, "current_version": VERSION, "has_update": False}
 
-    now = time.perf_counter()
+    now = time.time()
     if not force and _cached_update_result is not None and (now - _last_check_time < CACHE_DURATION_SECONDS):
         return _cached_update_result
 
