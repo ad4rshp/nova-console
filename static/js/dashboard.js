@@ -9,6 +9,44 @@
   }
 
   const PARAM_KEYS = ['num_ctx', 'num_predict', 'temperature', 'top_k', 'top_p', 'repeat_penalty'];
+  const PARAM_METADATA = {
+    num_ctx: {
+      label: 'Context Window Size',
+      key: 'num_ctx',
+      description: 'Maximum tokens retained in conversation memory context',
+      badge: 'Context Tokens'
+    },
+    num_predict: {
+      label: 'Max Generation Tokens',
+      key: 'num_predict',
+      description: 'Upper limit of tokens the model can generate per response',
+      badge: 'Max Output'
+    },
+    temperature: {
+      label: 'Sampling Temperature',
+      key: 'temperature',
+      description: 'Controls randomness: lower is precise and deterministic, higher is creative',
+      badge: 'Creativity'
+    },
+    top_k: {
+      label: 'Top-K Focus',
+      key: 'top_k',
+      description: 'Limits token sampling pool to the top K most probable words',
+      badge: 'Focus'
+    },
+    top_p: {
+      label: 'Top-P Diversity',
+      key: 'top_p',
+      description: 'Nucleus sampling cumulative probability threshold',
+      badge: 'Diversity'
+    },
+    repeat_penalty: {
+      label: 'Repetition Penalty',
+      key: 'repeat_penalty',
+      description: 'Penalizes repeated phrases and repetitive response loops',
+      badge: 'Anti-Repetition'
+    }
+  };
   const fmt = n => Number(n || 0).toLocaleString();
   let chatHistory = [];
   let currentLimits = {};
@@ -282,9 +320,29 @@
       document.querySelector('#tpsVal').textContent = `${u.avg_tps || 0} tps`;
       document.querySelector('#latencyVal').textContent = `${u.average_latency_s || 0}s latency`;
 
-      // 5. Requests & Tokens: Sparkline Trend
-      document.querySelector('#requestsVal').textContent = fmt(u.requests);
-      document.querySelector('#tokensVal').textContent = `${fmt(u.prompt_tokens)} in · ${fmt(u.output_tokens)} out`;
+      // 5. Total Tokens & Input/Output Activity (Sparkline Trend)
+      const totalTokens = (u.prompt_tokens || 0) + (u.output_tokens || 0);
+      const totalTokensEl = document.querySelector('#totalTokensVal');
+      if (totalTokensEl) totalTokensEl.textContent = fmt(totalTokens);
+      const requestsTag = document.querySelector('#requestsTag');
+      if (requestsTag) requestsTag.textContent = `${fmt(u.requests || 0)} reqs`;
+      const requestsVal = document.querySelector('#requestsVal');
+      if (requestsVal) requestsVal.textContent = fmt(u.requests || 0);
+      const tokensVal = document.querySelector('#tokensVal');
+      if (tokensVal) tokensVal.textContent = `${fmt(u.prompt_tokens || 0)} in · ${fmt(u.output_tokens || 0)} out`;
+
+      // 6. Active Provider & Estimated Cloud Cost Savings
+      const providerEl = document.querySelector('#providerVal');
+      if (providerEl) {
+        providerEl.textContent = data.engine?.name || data.backend_type || 'Local Engine';
+      }
+      const costEl = document.querySelector('#costVal');
+      if (costEl) {
+        const promptCost = (u.prompt_tokens || 0) * 0.0000025;
+        const outputCost = (u.output_tokens || 0) * 0.000010;
+        const estSavings = (promptCost + outputCost).toFixed(2);
+        costEl.textContent = `$0.00 · Saved ~$${estSavings}`;
+      }
 
       // Plot Sparklines directly from usage metrics or history fallback
       const tpsPoints = (u.recent_tps && u.recent_tps.length > 0) ? u.recent_tps : [];
@@ -484,13 +542,18 @@
 
     if (container.children.length === 0) {
       container.innerHTML = PARAM_KEYS.map(key => {
+        const meta = PARAM_METADATA[key] || { label: key, key: key, description: '', badge: '' };
         const [min, max] = currentLimits[key] || [0, 100];
         const step = (key === 'temperature' || key === 'top_p' || key === 'repeat_penalty') ? '0.05' : '1';
         return `
           <div class="param-box">
             <div class="param-header">
-              <span class="param-title">${key}</span>
-              <span class="param-limits">${min}–${max}</span>
+              <span class="param-title" title="${meta.description}">${meta.label}</span>
+              <span class="param-limits" title="Safe parameter limits">${min}–${max}</span>
+            </div>
+            <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:6px;">
+              <span class="tag-neu" style="font-size:10px; font-family:monospace; color:var(--ink-muted);">${meta.key}</span>
+              <span style="font-size:10.5px; color:var(--ink-subtle);">${meta.badge}</span>
             </div>
             <input id="input_${key}" type="number" min="${min}" max="${max}" step="${step}" value="${params[key] || ''}">
           </div>
@@ -553,6 +616,21 @@
   };
 
   function applyPreset(presetKey) {
+    if (presetKey === 'custom') {
+      updatePresetUI('custom');
+      const firstInput = document.querySelector('#input_num_ctx');
+      if (firstInput) {
+        firstInput.focus();
+        firstInput.select();
+      }
+      showToast({
+        title: 'Custom Profile Active',
+        message: 'Personalize context length, tokens, and temperature below. Click Save or Rebuild Nova when ready.',
+        type: 'info'
+      });
+      return;
+    }
+
     const preset = HARDWARE_PRESETS[presetKey];
     if (!preset) return;
 
@@ -594,14 +672,14 @@
       }
     }
 
-    updatePresetUI(matchedKey);
+    updatePresetUI(matchedKey || 'custom');
   }
 
   function updatePresetUI(activeKey) {
-    ['low', 'medium', 'high'].forEach(key => {
+    ['low', 'medium', 'high', 'custom'].forEach(key => {
       const btn = document.querySelector(`#preset${key.charAt(0).toUpperCase() + key.slice(1)}Btn`);
       if (btn) {
-        if (key === activeKey) {
+        if (key === activeKey || (!activeKey && key === 'custom')) {
           btn.classList.add('active');
         } else {
           btn.classList.remove('active');

@@ -84,10 +84,6 @@
         <svg class="icon" viewBox="0 0 24 24"><rect width="18" height="11" x="3" y="11" rx="2" ry="2"/><path d="M7 11V7a5 5 0 0 1 10 0v4"/></svg>
         <span id="authBtnLabel">Auth</span>
       </button>
-      <button id="headerChatBtn" class="btn btn-blue" title="Open Nova Chat">
-        <svg class="icon" viewBox="0 0 24 24"><path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"/></svg>
-        Chat with Nova
-      </button>
       <button id="refreshBtn" class="btn" title="Refresh">
         <svg class="icon" viewBox="0 0 24 24"><path d="M21 12a9 9 0 0 0-9-9 9.75 9.75 0 0 0-6.74 2.74L3 8"/><path d="M3 3v5h5"/><path d="M3 12a9 9 0 0 0 9 9 9.75 9.75 0 0 0 6.74-2.74L21 16"/><path d="M16 21h5v-5"/></svg>
         Refresh
@@ -180,21 +176,43 @@
       </div>
     </div>
 
-    <!-- Card 5: Proxied Requests (In-Card SVG Sparkline Trend) -->
+    <!-- Card 5: Total Tokens & Input/Output Activity -->
     <div class="stat-card">
       <div class="stat-head">
-        <span class="stat-label">Requests</span>
+        <span class="stat-label">Total Tokens</span>
+        <span class="tag-neu" id="requestsTag">-- reqs</span>
       </div>
       <div class="stat-body">
         <div>
-          <div class="stat-val" id="requestsVal">--</div>
-          <div class="stat-sub" id="tokensVal">-- prompt · -- out</div>
+          <div class="stat-val" id="totalTokensVal">--</div>
+          <div class="stat-sub" id="tokensVal">-- in · -- out</div>
+          <span id="requestsVal" style="display:none;">--</span>
         </div>
         <!-- In-Card Sparkline Graph -->
         <svg class="sparkline-svg" viewBox="0 0 72 36">
           <path id="reqSparkFill" class="spark-fill" d="M0,36 L72,36 Z"/>
           <path id="reqSparkLine" class="spark-line" d="M0,28 Q36,8 72,16"/>
         </svg>
+      </div>
+    </div>
+
+    <!-- Card 6: Active Provider & Cost Savings -->
+    <div class="stat-card">
+      <div class="stat-head">
+        <span class="stat-label">Provider &amp; Cost</span>
+        <span class="tag-neu" id="costTag" style="color:var(--ok);">100% Free</span>
+      </div>
+      <div class="stat-body">
+        <div>
+          <div class="stat-val" id="providerVal">--</div>
+          <div class="stat-sub" id="costVal">$0.00 · Saved ~$0.00</div>
+        </div>
+        <div style="width:36px; height:36px; border-radius:50%; background:var(--neu-inset); display:flex; align-items:center; justify-content:center; flex-shrink:0;" title="Local Zero-Cost Inference">
+          <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" style="color:#10b981;">
+            <circle cx="12" cy="12" r="10"></circle>
+            <path d="m9 12 2 2 4-4"></path>
+          </svg>
+        </div>
       </div>
     </div>
   </section>
@@ -275,6 +293,10 @@
         <button type="button" class="preset-btn" id="presetHighBtn" onclick="applyPreset('high')" title="Full power 8K context profile for 12+ GB VRAM">
           <span class="preset-title">High (8K)</span>
           <span class="preset-sub">12GB+ VRAM · Heavy</span>
+        </button>
+        <button type="button" class="preset-btn" id="presetCustomBtn" onclick="applyPreset('custom')" title="Custom Profile: customize context window, tokens, and temperature to your preference">
+          <span class="preset-title">Custom</span>
+          <span class="preset-sub">Personalized Tuning</span>
         </button>
       </div>
       <div class="preset-status-wrap">
@@ -532,65 +554,97 @@
 </div>
 
 <!-- Trust, Privacy & Legitimacy Modal -->
-<div id="trustModal" class="neu-modal-backdrop" style="display:none;">
-  <div class="neu-modal" style="max-width:560px;">
-    <div style="display:flex; align-items:center; justify-content:space-between; margin-bottom:14px;">
+<div id="trustModal" class="neu-modal-backdrop" style="display:none;" onclick="if(event.target===this)closeTrustModal()">
+  <div class="neu-modal" style="max-width:620px; padding:24px;">
+    <!-- Modal Header -->
+    <div style="display:flex; align-items:center; justify-content:space-between; margin-bottom:18px; padding-bottom:12px; border-bottom:1px solid rgba(148, 163, 184, 0.15);">
       <div style="display:flex; align-items:center; gap:12px;">
-        <div style="width:40px; height:40px; border-radius:12px; background:rgba(16, 185, 129, 0.12); color:#10b981; display:flex; align-items:center; justify-content:center; flex-shrink:0;">
-          <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z"/></svg>
+        <div style="width:42px; height:42px; border-radius:12px; background:rgba(16, 185, 129, 0.12); color:#10b981; display:flex; align-items:center; justify-content:center; flex-shrink:0;">
+          <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round">
+            <path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z"/>
+          </svg>
         </div>
         <div>
-          <h3 style="margin:0; font-size:16px; font-weight:800; color:var(--ink);">Trust &amp; Privacy Transparency</h3>
-          <div style="font-size:11.5px; color:var(--ink-muted);">Built for the local AI enthusiast community · 100% Legit &amp; Open Source</div>
+          <h3 style="margin:0; font-size:17px; font-weight:800; color:var(--ink);">Trust &amp; Privacy Transparency</h3>
+          <div style="font-size:12px; color:var(--ink-muted); margin-top:2px;">Local-First AI Workstation · 100% Private &amp; Open Source</div>
         </div>
       </div>
-      <button class="btn btn-sm" onclick="closeTrustModal()" style="border-radius:50%; width:28px; height:28px; padding:0; display:flex; align-items:center; justify-content:center;">✕</button>
+      <button class="btn btn-sm" onclick="closeTrustModal()" style="border-radius:50%; width:28px; height:28px; padding:0; display:flex; align-items:center; justify-content:center;" title="Close">✕</button>
     </div>
 
-    <div class="neu-inset-well" style="margin-bottom:14px; padding:12px; display:flex; flex-direction:column; gap:10px;">
-      <div style="display:flex; align-items:flex-start; gap:10px;">
-        <span style="color:#10b981; font-size:15px;">✓</span>
-        <div>
-          <strong style="font-size:12px; color:var(--ink);">100% Offline Loopback (`127.0.0.1` Default)</strong>
-          <p style="margin:2px 0 0 0; font-size:11px; color:var(--ink-muted); line-height:1.4;">
-            Nova Console binds strictly to localhost. When LAN mode is explicitly enabled, all administrative and chat endpoints enforce cryptographic token authentication.
-          </p>
+    <!-- 4 Clean Cards Grid -->
+    <div style="display:grid; grid-template-columns:repeat(auto-fit, minmax(260px, 1fr)); gap:12px; margin-bottom:18px;">
+      
+      <!-- Card 1: Localhost Loopback -->
+      <div class="neu-inset-well" style="padding:14px; border-radius:12px; display:flex; flex-direction:column; gap:6px;">
+        <div style="display:flex; justify-content:space-between; align-items:center;">
+          <div style="display:flex; align-items:center; gap:8px;">
+            <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="#10b981" stroke-width="2.2"><path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z"/></svg>
+            <strong style="font-size:12.5px; color:var(--ink);">100% Offline Loopback</strong>
+          </div>
+          <span class="tag-neu" style="font-size:10px; color:#10b981;">127.0.0.1</span>
         </div>
+        <p style="margin:0; font-size:11.5px; color:var(--ink-muted); line-height:1.45;">
+          Binds strictly to local loopback by default. LAN mode requires explicit configuration and enforces cryptographic token authentication.
+        </p>
       </div>
-      <div style="display:flex; align-items:flex-start; gap:10px;">
-        <span style="color:#10b981; font-size:15px;">✓</span>
-        <div>
-          <strong style="font-size:12px; color:var(--ink);">Zero Outbound Telemetry or Tracking</strong>
-          <p style="margin:2px 0 0 0; font-size:11px; color:var(--ink-muted); line-height:1.4;">
-            No tracking pixels, analytics, or telemetry pings. Update checks are disabled by default (opt-in via <code>NOVA_CHECK_UPDATES=1</code> querying GitHub Releases).
-          </p>
+
+      <!-- Card 2: Zero Telemetry -->
+      <div class="neu-inset-well" style="padding:14px; border-radius:12px; display:flex; flex-direction:column; gap:6px;">
+        <div style="display:flex; justify-content:space-between; align-items:center;">
+          <div style="display:flex; align-items:center; gap:8px;">
+            <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="#3b82f6" stroke-width="2.2"><path d="M17.94 17.94A10.07 10.07 0 0 1 12 20c-7 0-11-8-11-8a18.45 18.45 0 0 1 5.06-5.94M9.9 4.24A9.12 9.12 0 0 1 12 4c7 0 11 8 11 8a18.5 18.5 0 0 1-2.16 3.19m-6.72-1.07a3 3 0 1 1-4.24-4.24"/><line x1="1" y1="1" x2="23" y2="23"/></svg>
+            <strong style="font-size:12.5px; color:var(--ink);">Zero Telemetry</strong>
+          </div>
+          <span class="tag-neu" style="font-size:10px; color:#3b82f6;">0 Tracking</span>
         </div>
+        <p style="margin:0; font-size:11.5px; color:var(--ink-muted); line-height:1.45;">
+          No tracking pixels, analytics beacons, or remote telemetry. Update checks are strictly opt-in and disabled by default.
+        </p>
       </div>
-      <div style="display:flex; align-items:flex-start; gap:10px;">
-        <span style="color:#10b981; font-size:15px;">✓</span>
-        <div>
-          <strong style="font-size:12px; color:var(--ink);">Strict Command Approval Sandbox</strong>
-          <p style="margin:2px 0 0 0; font-size:11px; color:var(--ink-muted); line-height:1.4;">
-            AI models cannot run silent background terminal commands. Every command requires an explicit modal review with risk analysis before execution.
-          </p>
+
+      <!-- Card 3: Command Sandbox -->
+      <div class="neu-inset-well" style="padding:14px; border-radius:12px; display:flex; flex-direction:column; gap:6px;">
+        <div style="display:flex; justify-content:space-between; align-items:center;">
+          <div style="display:flex; align-items:center; gap:8px;">
+            <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="#f59e0b" stroke-width="2.2"><polyline points="4 17 10 11 4 5"/><line x1="12" y1="19" x2="20" y2="19"/></svg>
+            <strong style="font-size:12.5px; color:var(--ink);">Explicit Sandbox</strong>
+          </div>
+          <span class="tag-neu" style="font-size:10px; color:#f59e0b;">HMAC Protected</span>
         </div>
+        <p style="margin:0; font-size:11.5px; color:var(--ink-muted); line-height:1.45;">
+          AI models cannot execute commands silently. Every terminal action requires single-use cryptographic token approval and modal confirmation.
+        </p>
       </div>
-      <div style="display:flex; align-items:flex-start; gap:10px;">
-        <span style="color:#10b981; font-size:15px;">✓</span>
-        <div>
-          <strong style="font-size:12px; color:var(--ink);">Fully Inspectable Open Source (MIT)</strong>
-          <p style="margin:2px 0 0 0; font-size:11px; color:var(--ink-muted); line-height:1.4;">
-            No closed-source DLLs or obfuscated blobs. You can read, audit, and modify every line of Python and JavaScript, or run directly via <code>python launch.py</code> without compiling.
-          </p>
+
+      <!-- Card 4: Auditable Open Source -->
+      <div class="neu-inset-well" style="padding:14px; border-radius:12px; display:flex; flex-direction:column; gap:6px;">
+        <div style="display:flex; justify-content:space-between; align-items:center;">
+          <div style="display:flex; align-items:center; gap:8px;">
+            <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="#8b5cf6" stroke-width="2.2"><polyline points="16 18 22 12 16 6"/><polyline points="8 6 2 12 8 18"/></svg>
+            <strong style="font-size:12.5px; color:var(--ink);">MIT Open Source</strong>
+          </div>
+          <span class="tag-neu" style="font-size:10px; color:#8b5cf6;">100% Auditable</span>
         </div>
+        <p style="margin:0; font-size:11.5px; color:var(--ink-muted); line-height:1.45;">
+          No binary blobs or obfuscated code. Fully auditable Python and vanilla JavaScript you can run, inspect, and modify freely.
+        </p>
       </div>
+
     </div>
 
-    <div style="display:flex; justify-content:space-between; align-items:center; flex-wrap:wrap; gap:8px;">
-      <span style="font-size:11px; color:var(--ink-subtle);">License: <strong>MIT Open Source</strong></span>
+    <!-- Modal Footer -->
+    <div style="display:flex; justify-content:space-between; align-items:center; flex-wrap:wrap; gap:8px; padding-top:12px; border-top:1px solid rgba(148, 163, 184, 0.15);">
+      <div style="display:flex; align-items:center; gap:6px; font-size:11.5px; color:var(--ink-muted);">
+        <span class="dot" style="background:#10b981; width:7px; height:7px; border-radius:50%; display:inline-block;"></span>
+        <span>Verified Localhost Environment</span>
+      </div>
       <div style="display:flex; gap:8px;">
-        <button class="btn btn-sm" onclick="window.open('https://github.com/ad4rshp/nova-console', '_blank')">View GitHub Source</button>
-        <button class="btn btn-sm btn-primary" onclick="closeTrustModal()">Close</button>
+        <button class="btn btn-sm" onclick="window.open('https://github.com/ad4rshp/nova-console', '_blank')">
+          <svg class="icon" viewBox="0 0 24 24" style="width:13px;height:13px;"><path d="M9 19c-5 1.5-5-2.5-7-3m14 6v-3.87a3.37 3.37 0 0 0-.94-2.61c3.14-.35 6.44-1.54 6.44-7A5.44 5.44 0 0 0 20 4.77 5.07 5.07 0 0 0 19.91 1S18.73.65 16 2.48a13.38 13.38 0 0 0-7 0C6.27.65 5.09 1 5.09 1A5.07 5.07 0 0 0 5 4.77a5.44 5.44 0 0 0-1.5 3.78c0 5.42 3.3 6.61 6.44 7A3.37 3.37 0 0 0 9 18.13V22"/></svg>
+          GitHub Repository
+        </button>
+        <button class="btn btn-sm btn-primary" onclick="closeTrustModal()">Got It</button>
       </div>
     </div>
   </div>
