@@ -33,7 +33,6 @@ asyncio_mode = "strict"
 asyncio_default_fixture_loop_scope = "function"
 filterwarnings = [
     "ignore::DeprecationWarning",
-    "ignore::starlette.exceptions.StarletteDeprecationWarning",
     "ignore::_pytest.warning_types.PytestRemovedIn10Warning",
 ]
 

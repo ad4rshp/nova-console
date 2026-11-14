@@ -86,14 +86,19 @@ DEFAULT_APPROVED_BINARIES = [
 ]
 
 def is_safe_workspace_path(requested_path: str | None) -> bool:
-    """
+    r"""
     Returns True if requested_path resolves within WORKSPACE_DIR, False if traversal outside occurs.
+    Cross-platform: normalizes backslashes so Windows-style path traversal ('..\..') is recognized on POSIX.
     """
     if not requested_path:
         return True
     try:
+        norm = str(requested_path).replace("\\", "/")
         base_workspace = WORKSPACE_DIR.resolve()
-        target = Path(requested_path).resolve()
+        target_path = Path(norm)
+        if not target_path.is_absolute():
+            target_path = base_workspace / target_path
+        target = target_path.resolve()
         target.relative_to(base_workspace)
         return True
     except (ValueError, Exception):
@@ -170,8 +175,13 @@ def _setup_windows_job_object(proc_handle: int, memory_limit_mb: int = 512, max_
         info.BasicLimitInformation.ActiveProcessLimit = max_processes
 
         res = kernel32.SetInformationJobObject(job, 9, ctypes.byref(info), ctypes.sizeof(info))
-        if res:
-            kernel32.AssignProcessToJobObject(job, proc_handle)
+        if not res:
+            kernel32.CloseHandle(job)
+            return None
+        assign_res = kernel32.AssignProcessToJobObject(job, proc_handle)
+        if not assign_res:
+            kernel32.CloseHandle(job)
+            return None
         return job
     except Exception:
         return None
@@ -709,6 +719,21 @@ def run_system_command(
             )
             if hasattr(proc, "_handle") and proc._handle:
                 job_handle = _setup_windows_job_object(int(proc._handle))
+                if not job_handle and is_strict_sandbox():
+                    try:
+                        proc.kill()
+                    except Exception:
+                        pass
+                    return {
+                        "ok": False,
+                        "command": command,
+                        "working_dir": str(target_dir),
+                        "output": "Windows process isolation failure: Unable to assign process to secure Job Object under strict isolation policy.",
+                        "error": "Windows Job Object enforcement failed",
+                        "return_code": 500,
+                        "risk_level": risk_level,
+                        "execution_time": 0.0,
+                    }
         else:
             bash_cmd = ["/bin/bash", "--noprofile", "--norc"]
             if is_strict_sandbox():

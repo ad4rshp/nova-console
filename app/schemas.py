@@ -39,7 +39,7 @@ class ExecuteCommandPayload(BaseModel):
 
 class ChatMessagePayload(BaseModel):
     role: str = Field(..., pattern=r"^(user|assistant|system)$")
-    content: str = Field(default="", max_length=131072)
+    content: str = Field(default="", max_length=65536)
     images: list[str] = Field(default_factory=list, max_length=10)
 
     model_config = ConfigDict(extra="ignore")
@@ -47,8 +47,17 @@ class ChatMessagePayload(BaseModel):
 class DashboardChatPayload(BaseModel):
     model: str | None = Field(default=None, max_length=128, pattern=r"^[a-zA-Z0-9_\-\.:/]+$")
     messages: list[ChatMessagePayload] = Field(default_factory=list, max_length=100)
-    prompt: str | None = Field(default=None, max_length=131072)
+    prompt: str | None = Field(default=None, max_length=65536)
     images: list[str] = Field(default_factory=list, max_length=10)
     think: bool = False
+    temperature: float | None = Field(default=None, ge=0.0, le=2.0)
+    top_p: float | None = Field(default=None, ge=0.0, le=1.0)
+    max_tokens: int | None = Field(default=None, ge=1, le=32768)
+    stream: bool = True
 
     model_config = ConfigDict(extra="ignore")
+
+class HistoryQuery(BaseModel):
+    limit: int = Field(default=50, ge=1, le=200)
+    offset: int = Field(default=0, ge=0)
+    model: str | None = Field(default=None, max_length=128)

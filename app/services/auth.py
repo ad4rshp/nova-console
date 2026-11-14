@@ -41,6 +41,20 @@ def get_or_create_admin_token() -> str:
             _CACHED_ADMIN_TOKEN = secrets.token_hex(24)
         return _CACHED_ADMIN_TOKEN
 
+def rotate_admin_token() -> str:
+    """
+    Forces generation of a new administrative authorization token,
+    updates persistent database settings, and invalidates in-memory cache.
+    """
+    global _CACHED_ADMIN_TOKEN
+    new_token = secrets.token_hex(24)
+    try:
+        db_set_setting("admin_auth_token", new_token)
+    except Exception:
+        pass
+    _CACHED_ADMIN_TOKEN = new_token
+    return new_token
+
 def verify_admin_token(provided_token: str | None) -> bool:
     """
     Performs constant-time comparison of the provided token against the server admin token.

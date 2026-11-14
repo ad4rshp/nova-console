@@ -1,3 +1,6 @@
+import asyncio
+import threading
+import time
 from typing import Any
 
 import httpx
@@ -5,15 +8,56 @@ import httpx
 from app.config import LLM_BACKEND_URL, VERSION
 from app.database import db_get_settings, db_get_usage_metrics
 from app.services.hardware import get_gpu_stats, get_ram_stats, get_storage_stats
+from app.services.http_client import get_shared_client
 from app.services.modelfile import read_modelfile
+from app.services.resource_manager import global_resource_manager
 from app.services.updater import check_for_updates
 
+_model_cache_lock = threading.Lock()
+_model_cache: dict[str, Any] = {
+    "engine_name": "Local Inference Engine",
+    "models": [],
+    "models_ts": 0.0,
+    "loaded": [],
+    "loaded_ts": 0.0,
+    "status": "offline",
+}
+MODEL_CACHE_TTL = 30.0
+RUNNING_CACHE_TTL = 8.0
 
-async def detect_engine_type(url: str, client: httpx.AsyncClient) -> tuple[str, list[dict[str, Any]], list[dict[str, Any]], str]:
+
+def invalidate_model_cache() -> None:
+    """Invalidates the in-memory cache of models and running processes."""
+    with _model_cache_lock:
+        _model_cache["models_ts"] = 0.0
+        _model_cache["loaded_ts"] = 0.0
+
+
+async def detect_engine_type(
+    url: str,
+    client: httpx.AsyncClient | None = None,
+    force_refresh: bool = False
+) -> tuple[str, list[dict[str, Any]], list[dict[str, Any]], str]:
     """
-    Auto-detects the running inference engine:
+    Auto-detects the running inference engine with caching:
+    Available models are cached for 30s, active running models for 8s.
     Supports Ollama, LM Studio, vLLM, llama-server, LocalAI, or any OpenAI-compatible provider.
     """
+    now = time.time()
+    with _model_cache_lock:
+        models_fresh = (now - _model_cache["models_ts"] < MODEL_CACHE_TTL) and bool(_model_cache["models"])
+        loaded_fresh = (now - _model_cache["loaded_ts"] < RUNNING_CACHE_TTL)
+        if not force_refresh and models_fresh and loaded_fresh:
+            return (
+                _model_cache["engine_name"],
+                list(_model_cache["models"]),
+                list(_model_cache["loaded"]),
+                _model_cache["status"],
+            )
+
+    if client is None:
+        client = get_shared_client()
+
     models: list[dict[str, Any]] = []
     loaded: list[dict[str, Any]] = []
     engine_name = "Local Inference Engine"
@@ -33,6 +77,15 @@ async def detect_engine_type(url: str, client: httpx.AsyncClient) -> tuple[str, 
                     loaded = ps_res.json().get("models", [])
             except Exception:
                 pass
+
+            with _model_cache_lock:
+                _model_cache["engine_name"] = engine_name
+                _model_cache["models"] = models
+                _model_cache["models_ts"] = now
+                _model_cache["loaded"] = loaded
+                _model_cache["loaded_ts"] = now
+                _model_cache["status"] = status
+
             return engine_name, models, loaded, status
     except Exception:
         pass
@@ -63,22 +116,36 @@ async def detect_engine_type(url: str, client: httpx.AsyncClient) -> tuple[str, 
             else:
                 engine_name = "OpenAI-Compatible Engine"
 
+            with _model_cache_lock:
+                _model_cache["engine_name"] = engine_name
+                _model_cache["models"] = models
+                _model_cache["models_ts"] = now
+                _model_cache["loaded"] = loaded
+                _model_cache["loaded_ts"] = now
+                _model_cache["status"] = status
+
             return engine_name, models, loaded, status
     except Exception:
         pass
 
+    with _model_cache_lock:
+        _model_cache["status"] = "offline"
+
     return engine_name, models, loaded, "offline"
 
-async def get_dashboard_state() -> dict[str, Any]:
-    async with httpx.AsyncClient(timeout=3.5) as client:
-        engine_name, models, loaded, status = await detect_engine_type(LLM_BACKEND_URL, client)
 
-    ram = get_ram_stats()
-    gpu = get_gpu_stats()
-    storage = get_storage_stats()
-    mf = read_modelfile()
-    settings = db_get_settings()
-    usage = db_get_usage_metrics()
+async def get_dashboard_state(force_refresh: bool = False) -> dict[str, Any]:
+    client = get_shared_client()
+    engine_name, models, loaded, status = await detect_engine_type(LLM_BACKEND_URL, client, force_refresh=force_refresh)
+
+    ram, gpu, storage, mf, settings, usage = await asyncio.gather(
+        asyncio.to_thread(get_ram_stats),
+        asyncio.to_thread(get_gpu_stats),
+        asyncio.to_thread(get_storage_stats),
+        asyncio.to_thread(read_modelfile),
+        asyncio.to_thread(db_get_settings),
+        asyncio.to_thread(db_get_usage_metrics),
+    )
 
     saved_ctx = int(mf["parameters"].get("num_ctx", 2048))
     loaded_ctx = None
@@ -195,6 +262,7 @@ async def get_dashboard_state() -> dict[str, Any]:
 
     # Asynchronously check for release updates (cached in memory, 0 MB background RAM)
     update_info = await check_for_updates()
+    resource_profile = global_resource_manager.get_hardware_profile()
 
     return {
         "status": status,
@@ -221,6 +289,7 @@ async def get_dashboard_state() -> dict[str, Any]:
             "recommended_preset": recommended_preset,
             "split_offload": split_offload_info,
         },
+        "resource_profile": resource_profile,
         "diagnostics": diagnostics,
     }
 

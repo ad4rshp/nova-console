@@ -12,9 +12,12 @@ dist/
 build/
 
 # SQLite runtime artifacts
+*.db
 *.db-journal
 *.db-wal
 *.db-shm
+*.sqlite
+*.sqlite3
 nova-dashboard.db
 
 # Environment variables

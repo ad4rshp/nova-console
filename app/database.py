@@ -127,19 +127,22 @@ def init_db() -> None:
             );
         """)
 
-        # Migration: ensure iso_time and images exist if table was created in an earlier build
+        # Migration: ensure columns exist if table was created in an earlier build
         cursor.execute("PRAGMA table_info(chat_history);")
         chat_cols = {row["name"] for row in cursor.fetchall()}
-        if "iso_time" not in chat_cols:
-            try:
-                cursor.execute("ALTER TABLE chat_history ADD COLUMN iso_time TEXT DEFAULT '';")
-            except Exception:
-                pass
-        if "images" not in chat_cols:
-            try:
-                cursor.execute("ALTER TABLE chat_history ADD COLUMN images TEXT DEFAULT '';")
-            except Exception:
-                pass
+        for col_name, col_def in [
+            ("timestamp", "REAL DEFAULT 0"),
+            ("iso_time", "TEXT DEFAULT ''"),
+            ("thinking", "TEXT DEFAULT ''"),
+            ("images", "TEXT DEFAULT ''"),
+        ]:
+            if col_name not in chat_cols:
+                try:
+                    cursor.execute(f"ALTER TABLE chat_history ADD COLUMN {col_name} {col_def};")
+                except Exception:
+                    pass
+
+        cursor.execute("CREATE INDEX IF NOT EXISTS idx_chat_timestamp ON chat_history(timestamp);")
 
         # 5. Terminal Command Audit Log Table (With permission status)
         cursor.execute("""
@@ -229,15 +232,25 @@ def db_record_request(
         ))
         conn.commit()
 
-def db_get_recent_requests(limit: int = 100) -> list[dict[str, Any]]:
+def db_get_recent_requests(
+    limit: int = 100,
+    offset: int = 0,
+    model: str | None = None
+) -> list[dict[str, Any]]:
+    query = """
+        SELECT id, iso_time as time, endpoint as path, model, prompt_tokens, completion_tokens as output_tokens,
+               ROUND(latency_ms / 1000.0, 2) as latency_s, tps, status_code, token_source
+        FROM request_history
+    """
+    params: list[Any] = []
+    if model and model.strip():
+        query += " WHERE model = ?"
+        params.append(model.strip())
+    query += " ORDER BY timestamp DESC LIMIT ? OFFSET ?"
+    params.extend([max(1, limit), max(0, offset)])
+
     with get_db() as conn:
-        rows = conn.execute("""
-            SELECT iso_time as time, endpoint as path, model, prompt_tokens, completion_tokens as output_tokens,
-                   ROUND(latency_ms / 1000.0, 2) as latency_s, tps, status_code, token_source
-            FROM request_history
-            ORDER BY timestamp DESC
-            LIMIT ?
-        """, (limit,)).fetchall()
+        rows = conn.execute(query, tuple(params)).fetchall()
         return [dict(r) for r in rows]
 
 def db_get_usage_metrics() -> dict[str, Any]:
@@ -256,7 +269,7 @@ def db_get_usage_metrics() -> dict[str, Any]:
         by_model = {r["model"]: r["cnt"] for r in by_model_rows}
 
         recent_rows = conn.execute("""
-            SELECT ROUND(latency_ms / 1000.0, 2) as lat, tps FROM request_history ORDER BY timestamp DESC LIMIT 10
+            SELECT ROUND(latency_ms / 1000.0, 2) as lat, tps, completion_tokens FROM request_history ORDER BY timestamp DESC LIMIT 12
         """).fetchall()
         rec_lat = round(sum(r["lat"] for r in recent_rows) / len(recent_rows), 2) if recent_rows else 0
         rec_tps_list = [r["tps"] for r in recent_rows if r["tps"] and r["tps"] > 0]
@@ -270,6 +283,10 @@ def db_get_usage_metrics() -> dict[str, Any]:
             SELECT COALESCE(SUM(total_tokens), 0) FROM request_history WHERE token_source = 'estimated'
         """).fetchone()[0]
 
+        # Recent sparkline data points in chronological order
+        recent_tps_points = [r["tps"] or 0.0 for r in reversed(recent_rows)]
+        recent_output_points = [r["completion_tokens"] or 0 for r in reversed(recent_rows)]
+
         return {
             "requests": agg["req_count"],
             "prompt_tokens": agg["total_prompt"],
@@ -277,6 +294,8 @@ def db_get_usage_metrics() -> dict[str, Any]:
             "average_latency_s": rec_lat or round(agg["avg_lat"], 2),
             "avg_tps": rec_tps,
             "by_model": by_model,
+            "recent_tps": recent_tps_points,
+            "recent_outputs": recent_output_points,
             "tokens_breakdown": {
                 "actual": actual_tokens,
                 "estimated": estimated_tokens
@@ -386,20 +405,22 @@ def db_get_modelfile_history(limit: int = 10) -> list[dict[str, Any]]:
         """, (limit,))
         return [dict(row) for row in cursor.fetchall()]
 
-def db_cleanup_old_records(retention_days: int = 30, max_requests: int = 20000) -> dict[str, int]:
+def db_cleanup_old_records(retention_days: int | None = None, max_requests: int | None = None) -> dict[str, int]:
     """
     Retention policy: Removes request and audit logs older than retention_days,
     and caps total request history rows to max_requests to prevent unbounded disk growth.
     """
-    cutoff = time.time() - (retention_days * 86400)
+    days = retention_days if retention_days is not None else int(os.environ.get("NOVA_DB_RETENTION_DAYS", "30"))
+    max_req = max_requests if max_requests is not None else int(os.environ.get("NOVA_DB_MAX_REQUESTS", "20000"))
+    cutoff = time.time() - (days * 86400)
     with get_db() as conn:
         c1 = conn.execute("DELETE FROM request_history WHERE timestamp < ?;", (cutoff,)).rowcount
-        c2 = conn.execute("DELETE FROM command_audit_log WHERE timestamp < datetime('now', ?);", (f"-{retention_days} days",)).rowcount
+        c2 = conn.execute("DELETE FROM command_audit_log WHERE timestamp < datetime('now', ?);", (f"-{days} days",)).rowcount
         conn.execute("""
             DELETE FROM request_history WHERE id NOT IN (
                 SELECT id FROM request_history ORDER BY id DESC LIMIT ?
             );
-        """, (max_requests,))
+        """, (max_req,))
         conn.commit()
         return {"deleted_requests": c1, "deleted_audit": c2}
 

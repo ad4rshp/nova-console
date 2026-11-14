@@ -83,6 +83,15 @@ class OllamaAdapter(LLMProvider):
             "stream": stream,
             "think": kwargs.get("think", False)
         }
+        options = {}
+        if kwargs.get("temperature") is not None:
+            options["temperature"] = float(kwargs["temperature"])
+        if kwargs.get("top_p") is not None:
+            options["top_p"] = float(kwargs["top_p"])
+        if kwargs.get("max_tokens") is not None:
+            options["num_predict"] = int(kwargs["max_tokens"])
+        if options:
+            req_body["options"] = options
         client = httpx.AsyncClient(timeout=httpx.Timeout(180.0, connect=8.0))
         try:
             async with client.stream("POST", f"{self.base_url}/api/chat", json=req_body) as response:

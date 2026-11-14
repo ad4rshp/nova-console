@@ -2,16 +2,38 @@ import os
 import threading
 import time
 from collections import defaultdict, deque
+from typing import Any
+
+
+class RateLimitResult(tuple):
+    """
+    Subclass of 3-tuple (allowed, remaining, retry_after) for 100% backward compatibility,
+    with named attribute access and .limit metadata.
+    """
+    def __new__(cls, allowed: bool, remaining: int, retry_after: float, limit: int = 60):
+        instance = super().__new__(cls, (allowed, remaining, retry_after))
+        instance.allowed = allowed
+        instance.remaining = remaining
+        instance.retry_after = retry_after
+        instance.limit = limit
+        return instance
 
 
 class SlidingWindowRateLimiter:
     """
-    Thread-safe bounded sliding-window in-memory rate limiter per client IP and category.
+    Thread-safe bounded sliding-window in-memory rate limiter.
+    Supports granular limits by endpoint category, client IP, or authenticated token/user.
+    Provides standard rate-limit headers (X-RateLimit-Limit, X-RateLimit-Remaining, Retry-After).
     """
 
     CATEGORY_DEFAULTS = {
+        "dashboard": 30,
+        "history": 20,
+        "settings": 10,
+        "models": 20,
+        "chat": 5,
+        "terminal": 5,
         "proxy": 120,
-        "chat": 60,
         "admin": 30,
         "default": 60,
     }
@@ -24,7 +46,7 @@ class SlidingWindowRateLimiter:
         self._last_active: dict[str, float] = {}
         self._lock = threading.Lock()
 
-    def _get_category_limit(self, category: str, explicit_limit: int | None = None) -> int:
+    def _get_category_limit(self, category: str, explicit_limit: int | None = None, is_local: bool = False) -> int:
         if explicit_limit is not None:
             return explicit_limit
 
@@ -41,7 +63,12 @@ class SlidingWindowRateLimiter:
             except ValueError:
                 pass
 
-        return self.CATEGORY_DEFAULTS.get(category.lower(), self.default_limit)
+        base = self.CATEGORY_DEFAULTS.get(category.lower(), self.default_limit)
+        # Relax limits for unexposed single-user localhost deployments to avoid throttling UI polling
+        if is_local and not os.environ.get("NOVA_STRICT_RATE_LIMIT"):
+            return max(base, base * 4)
+
+        return base
 
     def _prune_expired_locked(self, now: float, cutoff: float) -> None:
         """Removes empty deques and stale IP tracking to prevent memory exhaustion."""
@@ -63,19 +90,20 @@ class SlidingWindowRateLimiter:
 
     def check_rate_limit(
         self,
-        client_ip: str,
+        identifier: str,
         limit: int | None = None,
-        category: str = "default"
-    ) -> tuple[bool, int, float]:
+        category: str = "default",
+        is_local: bool = False
+    ) -> RateLimitResult:
         """
-        Checks if client IP is within rate limits for the given category.
+        Checks if client/principal identifier is within rate limits for the given category.
         Returns:
-            (allowed: bool, remaining: int, retry_after: float)
+            RateLimitResult(allowed: bool, remaining: int, retry_after: float, limit: int)
         """
-        max_requests = self._get_category_limit(category, limit)
+        max_requests = self._get_category_limit(category, limit, is_local=is_local)
         now = time.time()
         cutoff = now - self.window_seconds
-        key = f"{client_ip}:{category.lower()}"
+        key = f"{identifier}:{category.lower()}"
 
         with self._lock:
             # Periodic cleanup when table grows large
@@ -89,12 +117,12 @@ class SlidingWindowRateLimiter:
             if len(q) >= max_requests:
                 earliest = q[0]
                 retry_after = max(1.0, round(self.window_seconds - (now - earliest), 1))
-                return False, 0, retry_after
+                return RateLimitResult(False, 0, retry_after, limit=max_requests)
 
             q.append(now)
             self._last_active[key] = now
             remaining = max(0, max_requests - len(q))
-            return True, remaining, 0.0
+            return RateLimitResult(True, remaining, 0.0, limit=max_requests)
 
     def reset(self):
         with self._lock:
@@ -104,3 +132,40 @@ class SlidingWindowRateLimiter:
 
 # Global default rate limiter instance
 global_rate_limiter = SlidingWindowRateLimiter(default_limit=60, window_seconds=60.0)
+
+
+def check_category_rate_limit(
+    request: Any,
+    category: str,
+    response: Any = None
+) -> tuple[bool, dict[str, str], Any]:
+    """
+    Evaluates rate limit for the incoming request within a specific category.
+    Returns:
+        (allowed: bool, headers: dict[str, str], error_response: JSONResponse | None)
+    """
+    from fastapi.responses import JSONResponse
+
+    client_ip = request.client.host if (request and getattr(request, "client", None)) else "127.0.0.1"
+    is_local = client_ip in ("127.0.0.1", "::1", "localhost", "testclient", "testserver")
+
+    res = global_rate_limiter.check_rate_limit(client_ip, category=category, is_local=is_local)
+    headers = {
+        "X-RateLimit-Limit": str(res.limit),
+        "X-RateLimit-Remaining": str(res.remaining),
+    }
+
+    if not res.allowed:
+        headers["Retry-After"] = str(int(res.retry_after))
+        err_resp = JSONResponse(
+            status_code=429,
+            content={"error": f"Rate limit exceeded for category '{category}'. Please wait before making more requests."},
+            headers=headers
+        )
+        return False, headers, err_resp
+
+    if response is not None:
+        for k, v in headers.items():
+            response.headers[k] = v
+
+    return True, headers, None

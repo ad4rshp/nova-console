@@ -70,8 +70,61 @@
       if (!options.headers['Authorization']) options.headers['Authorization'] = `Bearer ${token}`;
     }
     const res = await fetch(url, options);
+    if (res.status === 401 && !url.includes('/api/dashboard') && !window.__auth_prompt_shown__) {
+      window.__auth_prompt_shown__ = true;
+      showToast({ title: 'Authentication Required', message: 'Click "Auth" in the header to enter your administrative key.', type: 'error', duration: 4000 });
+      setTimeout(() => { window.__auth_prompt_shown__ = false; }, 10000);
+    }
     return res;
   }
+
+  function openAuthModal() {
+    const modal = document.querySelector('#authModal');
+    const input = document.querySelector('#authTokenInput');
+    if (modal && input) {
+      input.value = getAuthToken();
+      modal.style.display = 'flex';
+      input.focus();
+    }
+  }
+
+  function closeAuthModal() {
+    const modal = document.querySelector('#authModal');
+    if (modal) modal.style.display = 'none';
+  }
+
+  function saveAuthToken() {
+    const input = document.querySelector('#authTokenInput');
+    if (input) {
+      const val = input.value.trim();
+      if (val) {
+        sessionStorage.setItem('nova_auth_token', val);
+        localStorage.setItem('nova_auth_token', val);
+        window.__NOVA_AUTH_TOKEN__ = val;
+        showToast({ title: 'Authenticated', message: 'Token saved for this workstation session.', type: 'info', duration: 2500 });
+      } else {
+        clearAuthToken();
+      }
+      closeAuthModal();
+      loadDashboard(true);
+    }
+  }
+
+  function clearAuthToken() {
+    sessionStorage.removeItem('nova_auth_token');
+    localStorage.removeItem('nova_auth_token');
+    window.__NOVA_AUTH_TOKEN__ = '';
+    const input = document.querySelector('#authTokenInput');
+    if (input) input.value = '';
+    showToast({ title: 'Token Cleared', message: 'Saved authentication token removed.', type: 'info', duration: 2500 });
+    closeAuthModal();
+    loadDashboard(true);
+  }
+
+  window.openAuthModal = openAuthModal;
+  window.closeAuthModal = closeAuthModal;
+  window.saveAuthToken = saveAuthToken;
+  window.clearAuthToken = clearAuthToken;
 
   async function postJson(url, payload) {
     const headers = { 'Content-Type': 'application/json' };
@@ -79,9 +132,6 @@
       method: 'POST',
       headers,
       body: JSON.stringify(payload)
-    });
-    return res.json();
-  }
     });
     return res.json();
   }
@@ -108,9 +158,13 @@
   }
 
   let latestDashboardData = null;
+  let isLoadingDashboard = false;
 
   // Load Dashboard Data & Update Radial Gauges + Sparklines
-  async function loadDashboard() {
+  async function loadDashboard(force = false) {
+    if (isLoadingDashboard) return;
+    if (document.hidden && !force) return;
+    isLoadingDashboard = true;
     try {
       const data = await apiFetch('/api/dashboard').then(r => r.json());
       latestDashboardData = data;
@@ -232,19 +286,35 @@
       document.querySelector('#requestsVal').textContent = fmt(u.requests);
       document.querySelector('#tokensVal').textContent = `${fmt(u.prompt_tokens)} in · ${fmt(u.output_tokens)} out`;
 
-      // Load History to Plot Sparklines
-      const history = await apiFetch('/api/history').then(r => r.json()).catch(() => []);
-      if (history.length > 0) {
-        const recent = history.slice(-12);
-        const tpsPoints = recent.map(h => h.tps || 0);
+      // Plot Sparklines directly from usage metrics or history fallback
+      const tpsPoints = (u.recent_tps && u.recent_tps.length > 0) ? u.recent_tps : [];
+      const outPoints = (u.recent_outputs && u.recent_outputs.length > 0) ? u.recent_outputs : [];
+      if (tpsPoints.length > 0) {
         const tpsPaths = generateSparkline(tpsPoints);
         document.querySelector('#tpsSparkLine').setAttribute('d', tpsPaths.line);
         document.querySelector('#tpsSparkFill').setAttribute('d', tpsPaths.fill);
-
-        const outPoints = recent.map(h => h.output_tokens || 0);
+      }
+      if (outPoints.length > 0) {
         const reqPaths = generateSparkline(outPoints);
         document.querySelector('#reqSparkLine').setAttribute('d', reqPaths.line);
         document.querySelector('#reqSparkFill').setAttribute('d', reqPaths.fill);
+      }
+
+      // Load Paginated History for History Table
+      const histLimit = isHistoryExpanded ? 50 : 15;
+      const history = await apiFetch(`/api/history?limit=${histLimit}`).then(r => r.json()).catch(() => []);
+      if (history.length > 0 && (!tpsPoints.length || !outPoints.length)) {
+        const recent = history.slice(-12);
+        if (!tpsPoints.length) {
+          const tpsPaths = generateSparkline(recent.map(h => h.tps || 0));
+          document.querySelector('#tpsSparkLine').setAttribute('d', tpsPaths.line);
+          document.querySelector('#tpsSparkFill').setAttribute('d', tpsPaths.fill);
+        }
+        if (!outPoints.length) {
+          const reqPaths = generateSparkline(recent.map(h => h.output_tokens || 0));
+          document.querySelector('#reqSparkLine').setAttribute('d', reqPaths.line);
+          document.querySelector('#reqSparkFill').setAttribute('d', reqPaths.fill);
+        }
       }
 
       // Populate Model Select Dropdown dynamically
@@ -365,6 +435,8 @@
 
     } catch (err) {
       console.error('Failed to load dashboard:', err);
+    } finally {
+      isLoadingDashboard = false;
     }
   }
 
@@ -1762,9 +1834,24 @@
   }
 
   document.querySelector('#refreshBtn').addEventListener('click', () => {
-    loadDashboard();
+    loadDashboard(true);
     showToast({ title: 'Refreshed', message: 'Metrics updated.', type: 'info', duration: 2500 });
   });
 
-  loadDashboard();
-  setInterval(loadDashboard, 4000);
+  // Resume polling immediately when user switches back to the tab
+  document.addEventListener('visibilitychange', () => {
+    if (!document.hidden) {
+      loadDashboard(true);
+    }
+  });
+
+  // Initial load
+  loadDashboard(true);
+
+  // Background-aware polling at 10s intervals (configurable via window.NOVA_POLL_INTERVAL)
+  const POLL_INTERVAL = window.NOVA_POLL_INTERVAL || 10000;
+  setInterval(() => {
+    if (!document.hidden) {
+      loadDashboard(false);
+    }
+  }, POLL_INTERVAL);

@@ -170,8 +170,11 @@ def validate_backend_url(raw_url: str) -> str:
             addr_info = socket.getaddrinfo(hostname, None, proto=socket.IPPROTO_TCP)
             for item in addr_info:
                 resolved_ips.append(ipaddress.ip_address(item[4][0]))
-        except Exception:
-            pass
+        except Exception as exc:
+            if not (os.environ.get("NOVA_TEST_MODE") and hostname in ("testclient", "testserver")):
+                raise ValueError(f"Security Violation: Unable to resolve backend hostname '{hostname}': {exc}")
+        if not resolved_ips and not (os.environ.get("NOVA_TEST_MODE") and hostname in ("testclient", "testserver")):
+            raise ValueError(f"Security Violation: Hostname '{hostname}' did not resolve to a valid IP address.")
 
     for ip in resolved_ips:
         if str(ip) == "169.254.169.254" or ip in ipaddress.ip_network("169.254.0.0/16"):
@@ -182,9 +185,6 @@ def validate_backend_url(raw_url: str) -> str:
             raise ValueError(f"Security Violation: Multicast backend address '{hostname}' ({ip}) is not permitted.")
         if ip.is_reserved and not ip.is_loopback:
             raise ValueError(f"Security Violation: Reserved backend address '{hostname}' ({ip}) is not permitted.")
-
-    return cleaned
-        # Not a raw IP address; standard hostname allowed
 
     return cleaned
 
@@ -214,8 +214,8 @@ PARAM_LIMITS = {
 WORKSPACE_DIR = Path(os.environ.get("NOVA_WORKSPACE", str(BASE_DIR))).resolve()
 COMMAND_TIMEOUT_SECONDS = int(os.environ.get("NOVA_COMMAND_TIMEOUT", 30))
 
-# Application Version & Update Channel
+# Application Version & Update Channel (Opt-in for strict 100% offline localhost privacy)
 VERSION = "2.1.0"
 GITHUB_REPO = os.environ.get("NOVA_GITHUB_REPO", "ad4rshp/nova-console")
-CHECK_UPDATES = os.environ.get("NOVA_CHECK_UPDATES", "1") == "1"
+CHECK_UPDATES = os.environ.get("NOVA_CHECK_UPDATES", "0") in ("1", "true", "yes")
 

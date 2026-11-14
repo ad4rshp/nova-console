@@ -91,7 +91,7 @@ def get_gpu_stats() -> dict[str, Any]:
                     total_capacity_mb = 0
                     for line in lines:
                         parts = [p.strip() for p in line.split(",")]
-                        if len(parts) >= 4:
+                        if len(parts) >= 5:
                             try:
                                 u_mb = int(float(parts[2]))
                                 t_mb = int(float(parts[3]))

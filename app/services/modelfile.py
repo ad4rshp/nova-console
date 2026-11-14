@@ -90,15 +90,19 @@ def update_modelfile(values: dict[str, Any]) -> dict[str, Any]:
 
     # Update system prompt if provided
     if "system_prompt" in values and isinstance(values["system_prompt"], str):
-        new_prompt = values["system_prompt"].strip()
+        new_prompt = values["system_prompt"].strip().replace('"""', "'''")
+        replacement_block = f'SYSTEM """\n{new_prompt}\n"""'
         if 'SYSTEM """' in text:
-            text = re.sub(r'SYSTEM\s+""".*?"""', f'SYSTEM """\n{new_prompt}\n"""', text, flags=re.DOTALL)
+            text = re.sub(r'SYSTEM\s+""".*?"""', lambda _: replacement_block, text, flags=re.DOTALL)
         elif re.search(r'SYSTEM\s+".*?"', text, flags=re.DOTALL):
-            text = re.sub(r'SYSTEM\s+".*?"', f'SYSTEM """\n{new_prompt}\n"""', text, flags=re.DOTALL)
+            text = re.sub(r'SYSTEM\s+".*?"', lambda _: replacement_block, text, flags=re.DOTALL)
         else:
-            text += f'\n\nSYSTEM """\n{new_prompt}\n"""\n'
+            text += f'\n\n{replacement_block}\n'
 
-    MODELFILE_PATH.write_text(text, encoding="utf-8")
+    # Atomic write to prevent partial/corrupted modelfile on unexpected crashes
+    temp_path = MODELFILE_PATH.with_suffix(".tmp")
+    temp_path.write_text(text, encoding="utf-8")
+    temp_path.replace(MODELFILE_PATH)
     mf = read_modelfile()
     now = time.time()
     iso_time = time.strftime("%Y-%m-%d %H:%M:%S")

@@ -7,12 +7,18 @@ from typing import Any
 import httpx
 from fastapi import APIRouter, Request, Response
 from fastapi.responses import JSONResponse, StreamingResponse
+from starlette.background import BackgroundTask
 
 from app import config
 from app.config import LLM_BACKEND_URL
 from app.database import db_record_request
 from app.services.auth import is_request_authenticated, verify_admin_token
-from app.services.rate_limiter import global_rate_limiter
+from app.services.rate_limiter import check_category_rate_limit
+from app.services.resource_manager import (
+    ResourceOverloadError,
+    ResourceTimeoutError,
+    global_resource_manager,
+)
 
 router = APIRouter(tags=["proxy"])
 
@@ -37,16 +43,10 @@ HOP_BY_HOP_HEADERS = {
 
 @router.api_route("/v1/{path:path}", methods=["GET", "POST", "PUT", "DELETE"])
 async def proxy_v1(path: str, request: Request):
-    client_ip = request.client.host if request.client else "127.0.0.1"
-
-    # 1. Rate Limiting Enforcement (Category: proxy, 120 req/min default)
-    allowed, remaining, retry_after = global_rate_limiter.check_rate_limit(client_ip, category="proxy")
+    # 1. Rate Limiting Enforcement (Category: proxy, 120 req/min default with standard headers)
+    allowed, rl_headers, err = check_category_rate_limit(request, category="proxy")
     if not allowed:
-        return JSONResponse(
-            status_code=429,
-            content={"error": "Rate limit exceeded. Too many requests."},
-            headers={"Retry-After": str(int(retry_after))},
-        )
+        return err
 
     # 2. Proxy Authentication Enforcement (Mandatory when LAN mode or auth requirement is active)
     require_proxy_auth = is_lan_mode_active() or os.environ.get("NOVA_REQUIRE_AUTH", "0") in ("1", "true", "yes")
@@ -105,6 +105,31 @@ async def proxy_v1(path: str, request: Request):
     model_name = req_json.get("model", "default")
     is_stream = bool(req_json.get("stream", False))
 
+    slot_acquired = False
+    if is_chat:
+        try:
+            await global_resource_manager.acquire_generation_slot()
+            slot_acquired = True
+        except ResourceOverloadError as exc:
+            return JSONResponse(
+                status_code=429,
+                content={"error": str(exc)},
+                headers={"Retry-After": "5", **rl_headers}
+            )
+        except ResourceTimeoutError as exc:
+            return JSONResponse(
+                status_code=504,
+                content={"error": str(exc)},
+                headers=rl_headers
+            )
+
+    slot_released = False
+    def safe_release_slot():
+        nonlocal slot_released
+        if slot_acquired and not slot_released:
+            slot_released = True
+            global_resource_manager.release_generation_slot()
+
     client = httpx.AsyncClient(timeout=httpx.Timeout(180.0, connect=10.0))
     try:
         req = client.build_request(
@@ -119,6 +144,7 @@ async def proxy_v1(path: str, request: Request):
             k: v for k, v in response.headers.items()
             if k.lower() not in HOP_BY_HOP_HEADERS
         }
+        res_headers.update(rl_headers)
 
         if not is_stream:
             try:
@@ -169,6 +195,7 @@ async def proxy_v1(path: str, request: Request):
             finally:
                 await response.aclose()
                 await client.aclose()
+                safe_release_slot()
 
         # Streaming response handling with incremental SSE event buffer
         prompt_tokens_est = len(str(req_json.get("messages", ""))) // 4 if "messages" in req_json else 0
@@ -180,6 +207,8 @@ async def proxy_v1(path: str, request: Request):
             sse_buffer = ""
             try:
                 async for chunk in response.aiter_bytes():
+                    if await request.is_disconnected():
+                        break
                     yield chunk
                     sse_buffer += chunk.decode("utf-8", errors="replace")
                     while "\n" in sse_buffer:
@@ -211,6 +240,7 @@ async def proxy_v1(path: str, request: Request):
             finally:
                 await response.aclose()
                 await client.aclose()
+                safe_release_slot()
                 duration = time.perf_counter() - start_time
                 tps = round(out_tokens / duration, 1) if duration > 0 and out_tokens > 0 else 0.0
                 if is_chat:
@@ -232,9 +262,11 @@ async def proxy_v1(path: str, request: Request):
             streaming_wrapper(),
             status_code=response.status_code,
             headers=res_headers,
+            background=BackgroundTask(safe_release_slot),
         )
 
     except httpx.ConnectError:
+        safe_release_slot()
         await client.aclose()
         is_authed = is_request_authenticated(request)
         error_detail = (
@@ -244,6 +276,7 @@ async def proxy_v1(path: str, request: Request):
         )
         return JSONResponse(status_code=502, content={"error": error_detail})
     except Exception as exc:
+        safe_release_slot()
         await client.aclose()
         is_authed = is_request_authenticated(request)
         error_detail = f"LLM backend gateway error: {str(exc)}" if is_authed else "LLM backend gateway error."

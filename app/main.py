@@ -1,10 +1,11 @@
+import json
 import logging
 import os
 import secrets
 from contextlib import asynccontextmanager
 from urllib.parse import urlparse
 
-from fastapi import FastAPI, HTTPException, Request
+from fastapi import FastAPI, HTTPException, Request, Response
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import HTMLResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
@@ -104,6 +105,18 @@ def is_public_path(path: str) -> bool:
         return True
     return False
 
+def apply_security_headers(response: Response, request_id: str) -> Response:
+    response.headers["X-Request-ID"] = request_id
+    response.headers["X-Content-Type-Options"] = "nosniff"
+    response.headers["X-Frame-Options"] = "SAMEORIGIN"
+    response.headers["Referrer-Policy"] = "strict-origin-when-cross-origin"
+    response.headers["Permissions-Policy"] = "camera=(), microphone=(self), geolocation=()"
+    response.headers["Content-Security-Policy"] = (
+        "default-src 'self'; script-src 'self' 'unsafe-inline'; style-src 'self' 'unsafe-inline'; "
+        "img-src 'self' data:; connect-src 'self'; font-src 'self';"
+    )
+    return response
+
 class SecurityHeadersMiddleware(BaseHTTPMiddleware):
     async def dispatch(self, request: Request, call_next):
         # 0. Request Correlation ID
@@ -113,37 +126,53 @@ class SecurityHeadersMiddleware(BaseHTTPMiddleware):
         # 1. Request Body Size Limits (10MB global, 1MB for sensitive admin endpoints)
         is_admin_endpoint = any(request.url.path.startswith(prefix) for prefix in ADMIN_API_PREFIXES)
         max_bytes = 1 * 1024 * 1024 if is_admin_endpoint else 10 * 1024 * 1024
+        limit_mb = max_bytes // (1024 * 1024)
 
         content_length = request.headers.get("content-length")
         if content_length:
             try:
                 if int(content_length) > max_bytes:
-                    limit_mb = max_bytes // (1024 * 1024)
-                    return JSONResponse(
+                    resp = JSONResponse(
                         status_code=413,
                         content={"error": f"Payload Too Large: request body exceeds maximum allowed limit of {limit_mb}MB."}
                     )
+                    return apply_security_headers(resp, request_id)
             except ValueError:
-                return JSONResponse(status_code=400, content={"error": "Invalid Content-Length header."})
+                resp = JSONResponse(status_code=400, content={"error": "Invalid Content-Length header."})
+                return apply_security_headers(resp, request_id)
 
-        # Enforce body size limits
+        # Enforce streaming body size limits (bounds memory consumption without buffering arbitrarily large payloads)
         if request.method in ("POST", "PUT", "PATCH"):
-            body = await request.body()
-            if len(body) > max_bytes:
-                limit_mb = max_bytes // (1024 * 1024)
-                return JSONResponse(
+            chunks = []
+            bytes_received = 0
+            exceeded = False
+            async for chunk in request.stream():
+                bytes_received += len(chunk)
+                if bytes_received > max_bytes:
+                    exceeded = True
+                    break
+                chunks.append(chunk)
+
+            if exceeded:
+                resp = JSONResponse(
                     status_code=413,
                     content={"error": f"Payload Too Large: request body exceeds maximum allowed limit of {limit_mb}MB."}
                 )
+                return apply_security_headers(resp, request_id)
+
+            full_body = b"".join(chunks)
+            request._body = full_body
+            request._stream_consumed = False
 
         # 2. Authentication enforcement: Protect all private routes when LAN mode is active or auth explicitly required
         require_auth = NOVA_ALLOW_LAN or os.environ.get("NOVA_REQUIRE_AUTH", "0") in ("1", "true", "yes")
         if require_auth and not is_public_path(request.url.path):
             if not is_request_authenticated(request):
-                return JSONResponse(
+                resp = JSONResponse(
                     status_code=401,
                     content={"error": "Unauthorized: Authentication required: LAN mode is active or private workstation route accessed. Provide a valid Authorization Bearer or X-Nova-Auth token."}
                 )
+                return apply_security_headers(resp, request_id)
 
         # 3. Origin & CSRF Protection on state-changing API endpoints
         if request.method in ("POST", "PUT", "DELETE", "PATCH") and request.url.path.startswith("/api/"):
@@ -154,25 +183,21 @@ class SecurityHeadersMiddleware(BaseHTTPMiddleware):
             origin = request.headers.get("origin") or request.headers.get("referer")
             if not origin:
                 if not is_test_client and not is_authed:
-                    return JSONResponse(
+                    resp = JSONResponse(
                         status_code=403,
                         content={"error": "Cross-Origin / CSRF security rejection: missing Origin or Referer header on state-changing request."}
                     )
+                    return apply_security_headers(resp, request_id)
             else:
                 if not is_valid_csrf_origin(origin):
-                    return JSONResponse(
+                    resp = JSONResponse(
                         status_code=403,
                         content={"error": "Cross-Origin / CSRF security rejection: unauthorized request origin (scheme, host, or port mismatch)."}
                     )
+                    return apply_security_headers(resp, request_id)
 
         response = await call_next(request)
-        response.headers["X-Request-ID"] = request_id
-        response.headers["X-Content-Type-Options"] = "nosniff"
-        response.headers["X-Frame-Options"] = "SAMEORIGIN"
-        response.headers["Referrer-Policy"] = "strict-origin-when-cross-origin"
-        response.headers["Permissions-Policy"] = "camera=(), microphone=(self), geolocation=()"
-        response.headers["Content-Security-Policy"] = "default-src 'self'; script-src 'self' 'unsafe-inline'; style-src 'self' 'unsafe-inline'; img-src 'self' data:; connect-src 'self' http: ws:; font-src 'self';"
-        return response
+        return apply_security_headers(response, request_id)
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
@@ -190,7 +215,11 @@ async def lifespan(app: FastAPI):
     except Exception:
         pass
     yield
-    db_checkpoint()
+    try:
+        from app.services.http_client import close_shared_client
+        await close_shared_client()
+    except Exception:
+        pass
     db_checkpoint()
 
 app = FastAPI(
@@ -240,7 +269,8 @@ async def serve_dashboard(request: Request):
             client_ip = request.client.host if request.client else ""
             if is_loopback_host(client_ip) or not client_ip:
                 admin_token = get_or_create_admin_token()
-                session_inject = f'<script id="nova-auth-script">window.__NOVA_AUTH_TOKEN__ = "{admin_token}";</script>\n</head>'
+                safe_token_json = json.dumps(admin_token).replace("<", "\\u003c").replace(">", "\\u003e")
+                session_inject = f'<script id="nova-auth-script">window.__NOVA_AUTH_TOKEN__ = {safe_token_json};</script>\n</head>'
                 html = html.replace("</head>", session_inject, 1)
             return HTMLResponse(content=html)
     raise HTTPException(status_code=404, detail="dashboard.html not found")

@@ -66,8 +66,13 @@ class OpenAICompatibleAdapter(LLMProvider):
             "model": model,
             "messages": messages,
             "stream": stream,
-            "temperature": kwargs.get("temperature", 0.7),
         }
+        if kwargs.get("temperature") is not None:
+            payload["temperature"] = float(kwargs["temperature"])
+        if kwargs.get("top_p") is not None:
+            payload["top_p"] = float(kwargs["top_p"])
+        if kwargs.get("max_tokens") is not None:
+            payload["max_tokens"] = int(kwargs["max_tokens"])
         if "stream_options" not in payload and stream:
             payload["stream_options"] = {"include_usage": True}
 
