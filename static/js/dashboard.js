@@ -1899,7 +1899,13 @@
   }
 
   // Manual Update Check
-  async function triggerManualUpdateCheck() {
+  let isCheckingUpdates = false;
+
+  async function triggerManualUpdateCheck(e) {
+    if (e && e.preventDefault) e.preventDefault();
+    if (isCheckingUpdates) return;
+    isCheckingUpdates = true;
+
     const btn = document.querySelector('#checkUpdateBtn');
     const icon = document.querySelector('#checkUpdateIcon');
     if (btn) btn.disabled = true;
@@ -1958,6 +1964,7 @@
     } finally {
       if (btn) btn.disabled = false;
       if (icon) icon.classList.remove('icon-spin');
+      isCheckingUpdates = false;
     }
   }
   window.triggerManualUpdateCheck = triggerManualUpdateCheck;
