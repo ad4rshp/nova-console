@@ -1,3 +1,4 @@
+import asyncio
 import json
 import re
 import subprocess
@@ -5,27 +6,39 @@ import time
 from pathlib import Path
 from typing import Any
 
-import httpx
-
-from app.config import MODELFILE_PATH, OLLAMA_HOST, PARAM_LIMITS
+from app.config import MODELFILE_PATH, PARAM_LIMITS
 from app.database import get_db
 
-DEFAULT_MODELFILE_CONTENT = """FROM qwen2.5-coder:1.5b
+DEFAULT_MODELFILE_CONTENT = """FROM qwen3.5:4b
 
-PARAMETER num_ctx 8192
-PARAMETER num_predict 2048
-PARAMETER temperature 0.2
+PARAMETER num_ctx 4096
+PARAMETER num_predict 1024
+PARAMETER temperature 0.4
 PARAMETER top_k 20
-PARAMETER top_p 0.95
-PARAMETER repeat_penalty 1.05
+PARAMETER top_p 0.9
+PARAMETER repeat_penalty 1.1
 
 SYSTEM \"\"\"
 You are Nova, an elite local coding, tool-use, and systems assistant powered by Ollama.
 
 Operational Principles:
-1. Precision & Verification: Inspect files before modifying; verify results using available tools.
-2. Structured Execution: Break complex tasks into verifiable phases.
-3. Concise Clarity: Avoid conversational filler; provide direct code, commands, or explanations.
+1. Precision & Verification:
+   - Inspect relevant files, schema, and environment context before proposing modifications.
+   - Break complex tasks into small, verifiable, atomic steps.
+   - Never assert that an action, test, build, or execution succeeded without verifying actual output.
+   - Always prioritize security, edge cases, error handling, and input validation.
+
+2. Code Quality & Architecture:
+   - Write clean, idiomatic, fully functional, and modular code with proper type annotations.
+   - Avoid placeholders, omitted logic (like "// TODO: implement"), or half-finished snippets.
+   - Maintain a full-stack perspective: consider API design, performance, UI/UX responsiveness, and state management.
+
+3. Tool Use & Execution:
+   - Prefer structured tools for file exploration, diagnostics, testing, and application control.
+   - Provide minimal, surgical edits when modifying existing files to preserve existing code structure and style.
+
+4. Communication & Tone:
+   - Be concise, direct, and technically rigorous. Omit conversational fluff and preamble.
 \"\"\"
 """
 
@@ -97,21 +110,35 @@ def update_modelfile(values: dict[str, Any]) -> dict[str, Any]:
         conn.commit()
     return mf
 
-async def evict_model_vram(model_name: str) -> None:
-    async with httpx.AsyncClient(timeout=5.0) as client:
-        try:
-            await client.post(f"{OLLAMA_HOST}/api/generate", json={"model": model_name, "keep_alive": 0})
-        except Exception:
-            pass
+async def evict_model_vram(model_name: str) -> bool:
+    from app.services.providers.factory import get_async_provider
+    provider = await get_async_provider()
+    if not provider.capabilities.get("vram_eviction", False):
+        return False
+    return await provider.unload_model(model_name)
 
 async def rebuild_nova_model(model_tag: str = "nova") -> dict[str, Any]:
+    from app.services.providers.factory import get_async_provider
+    provider = await get_async_provider()
+    if not provider.capabilities.get("modelfile_compilation", False):
+        return {
+            "ok": False,
+            "output": f"Modelfile compilation is only supported by Ollama. Current active provider is '{provider.name}'."
+        }
+
     # 1. Evict running instances of model from VRAM so weights recompile cleanly
     for target in [model_tag, f"{model_tag}:latest"]:
         await evict_model_vram(target)
 
-    # 2. Run ollama create
+    # 2. Run ollama create offloaded to worker thread (prevents blocking event loop)
     try:
-        result = subprocess.run(["ollama", "create", model_tag, "-f", str(MODELFILE_PATH)], capture_output=True, text=True, timeout=300)
+        result = await asyncio.to_thread(
+            subprocess.run,
+            ["ollama", "create", model_tag, "-f", str(MODELFILE_PATH)],
+            capture_output=True,
+            text=True,
+            timeout=300
+        )
         ok = (result.returncode == 0)
         if ok:
             with get_db() as conn:

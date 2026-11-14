@@ -1,13 +1,28 @@
 import json
+import os
 import sqlite3
 import time
+from pathlib import Path
 from typing import Any
 
+from app import config
 from app.config import DB_PATH
 
 
+def get_current_db_path() -> Path:
+    import sys
+    mod = sys.modules.get("app.database")
+    if mod and hasattr(mod, "DB_PATH") and mod.DB_PATH != getattr(config, "DB_PATH", None):
+        return Path(mod.DB_PATH)
+    env_path = os.environ.get("NOVA_DB_PATH")
+    if env_path:
+        return Path(env_path)
+    return getattr(config, "DB_PATH", DB_PATH)
+
 def get_db() -> sqlite3.Connection:
-    conn = sqlite3.connect(str(DB_PATH), timeout=15.0)
+    target_path = get_current_db_path()
+    target_path.parent.mkdir(parents=True, exist_ok=True)
+    conn = sqlite3.connect(str(target_path), timeout=15.0)
     conn.execute("PRAGMA journal_mode=WAL;")
     conn.execute("PRAGMA synchronous=NORMAL;")
     conn.execute("PRAGMA busy_timeout=5000;")

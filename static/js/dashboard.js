@@ -1,3 +1,13 @@
+  function escapeHtml(str) {
+    if (str == null) return '';
+    return String(str)
+      .replace(/&/g, '&amp;')
+      .replace(/</g, '&lt;')
+      .replace(/>/g, '&gt;')
+      .replace(/"/g, '&quot;')
+      .replace(/'/g, '&#39;');
+  }
+
   const PARAM_KEYS = ['num_ctx', 'num_predict', 'temperature', 'top_k', 'top_p', 'repeat_penalty'];
   const fmt = n => Number(n || 0).toLocaleString();
   let chatHistory = [];
@@ -49,20 +59,29 @@
   }
 
   function getAuthToken() {
-    return window.__NOVA_AUTH_TOKEN__ || localStorage.getItem("nova_auth_token") || "";
+    return window.__NOVA_AUTH_TOKEN__ || localStorage.getItem("nova_auth_token") || sessionStorage.getItem("nova_auth_token") || "";
+  }
+
+  async function apiFetch(url, options = {}) {
+    options.headers = options.headers || {};
+    const token = getAuthToken();
+    if (token) {
+      if (!options.headers['X-Nova-Auth']) options.headers['X-Nova-Auth'] = token;
+      if (!options.headers['Authorization']) options.headers['Authorization'] = `Bearer ${token}`;
+    }
+    const res = await fetch(url, options);
+    return res;
   }
 
   async function postJson(url, payload) {
     const headers = { 'Content-Type': 'application/json' };
-    const token = getAuthToken();
-    if (token) {
-      headers['X-Nova-Auth'] = token;
-      headers['Authorization'] = `Bearer ${token}`;
-    }
-    const res = await fetch(url, {
+    const res = await apiFetch(url, {
       method: 'POST',
       headers,
       body: JSON.stringify(payload)
+    });
+    return res.json();
+  }
     });
     return res.json();
   }
@@ -93,7 +112,7 @@
   // Load Dashboard Data & Update Radial Gauges + Sparklines
   async function loadDashboard() {
     try {
-      const data = await fetch('/api/dashboard').then(r => r.json());
+      const data = await apiFetch('/api/dashboard').then(r => r.json());
       latestDashboardData = data;
       const u = data.usage || {};
       const r = data.ram || {};
@@ -214,7 +233,7 @@
       document.querySelector('#tokensVal').textContent = `${fmt(u.prompt_tokens)} in · ${fmt(u.output_tokens)} out`;
 
       // Load History to Plot Sparklines
-      const history = await fetch('/api/history').then(r => r.json()).catch(() => []);
+      const history = await apiFetch('/api/history').then(r => r.json()).catch(() => []);
       if (history.length > 0) {
         const recent = history.slice(-12);
         const tpsPoints = recent.map(h => h.tps || 0);
@@ -233,18 +252,26 @@
       const chatSelect = document.querySelector('#chatModelSelect');
       const hasNova = models.some(m => m.name === 'nova:latest');
 
+      chatSelect.innerHTML = '';
       if (models.length > 0) {
         const defaultChoice = hasNova ? 'nova:latest' : models[0].name;
         const currentSelected = chatSelect.value || defaultChoice;
-        
-        chatSelect.innerHTML = models.map(m => 
-          `<option value="${m.name}" ${m.name === currentSelected ? 'selected' : ''}>${m.name}</option>`
-        ).join('');
+
+        models.forEach(m => {
+          const opt = document.createElement('option');
+          opt.value = m.name;
+          opt.textContent = m.name;
+          if (m.name === currentSelected) opt.selected = true;
+          chatSelect.appendChild(opt);
+        });
 
         const activeChoice = chatSelect.value || defaultChoice;
         document.querySelector('#chatModelBadge').textContent = activeChoice;
       } else {
-        chatSelect.innerHTML = `<option value="">No models installed</option>`;
+        const opt = document.createElement('option');
+        opt.value = '';
+        opt.textContent = 'No models installed';
+        chatSelect.appendChild(opt);
         document.querySelector('#chatModelBadge').textContent = 'No models found';
       }
 
@@ -265,29 +292,67 @@
 
       // Loaded Models Table (6 columns: Model, VRAM, Active Context, Saved Modelfile, Rebuild Status, Actions)
       const loadedBody = document.querySelector('#loadedBody');
+      loadedBody.innerHTML = '';
       if (data.loaded && data.loaded.length > 0) {
-        loadedBody.innerHTML = data.loaded.map(m => {
+        data.loaded.forEach(m => {
           const isNova = (m.name === 'nova:latest' || m.model === 'nova:latest');
           const savedCtx = data.modelfile_status?.saved_context;
           const isPending = isNova && data.modelfile_status?.pending_rebuild;
-          return `
-            <tr id="row_${m.name.replace(/[^a-zA-Z0-9]/g, '_')}">
-              <td><strong>${m.name}</strong></td>
-              <td><span class="tag-neu">${m.size_vram ? (m.size_vram / 1024**2).toFixed(0) + ' MB VRAM' : (m.details?.parameter_size || 'In Memory')}</span></td>
-              <td><strong>${m.context_length ? fmt(m.context_length) + ' tokens' : 'Default'}</strong></td>
-              <td>${isNova && savedCtx ? fmt(savedCtx) + ' tokens' : '—'}</td>
-              <td>${isPending ? '<span class="neu-pill bad" style="font-size:10.5px;">⚠️ Rebuild Required</span>' : '<span class="neu-pill ok" style="font-size:10.5px;">✓ Synced</span>'}</td>
-              <td>
-                <button class="btn btn-danger btn-sm" onclick="unloadModel('${m.name}', this)">
-                  <svg class="icon" viewBox="0 0 24 24"><path d="M18.36 6.64a9 9 0 1 1-12.73 0"/><line x1="12" y1="2" x2="12" y2="12"/></svg>
-                  Evict
-                </button>
-              </td>
-            </tr>
-          `;
-        }).join('');
+
+          const tr = document.createElement('tr');
+          tr.id = 'row_' + String(m.name).replace(/[^a-zA-Z0-9]/g, '_');
+
+          const tdName = document.createElement('td');
+          const strongName = document.createElement('strong');
+          strongName.textContent = m.name;
+          tdName.appendChild(strongName);
+          tr.appendChild(tdName);
+
+          const tdVram = document.createElement('td');
+          const tagSpan = document.createElement('span');
+          tagSpan.className = 'tag-neu';
+          tagSpan.textContent = m.size_vram ? (m.size_vram / 1024**2).toFixed(0) + ' MB VRAM' : (m.details?.parameter_size || 'In Memory');
+          tdVram.appendChild(tagSpan);
+          tr.appendChild(tdVram);
+
+          const tdCtx = document.createElement('td');
+          const strongCtx = document.createElement('strong');
+          strongCtx.textContent = m.context_length ? fmt(m.context_length) + ' tokens' : 'Default';
+          tdCtx.appendChild(strongCtx);
+          tr.appendChild(tdCtx);
+
+          const tdSaved = document.createElement('td');
+          tdSaved.textContent = isNova && savedCtx ? fmt(savedCtx) + ' tokens' : '—';
+          tr.appendChild(tdSaved);
+
+          const tdStatus = document.createElement('td');
+          const pillSpan = document.createElement('span');
+          pillSpan.className = isPending ? 'neu-pill bad' : 'neu-pill ok';
+          pillSpan.style.fontSize = '10.5px';
+          pillSpan.textContent = isPending ? '⚠️ Rebuild Required' : '✓ Synced';
+          tdStatus.appendChild(pillSpan);
+          tr.appendChild(tdStatus);
+
+          const tdAction = document.createElement('td');
+          const evictBtn = document.createElement('button');
+          evictBtn.className = 'btn btn-danger btn-sm';
+          evictBtn.innerHTML = '<svg class="icon" viewBox="0 0 24 24"><path d="M18.36 6.64a9 9 0 1 1-12.73 0"/><line x1="12" y1="2" x2="12" y2="12"/></svg> Evict';
+          evictBtn.addEventListener('click', function() {
+            unloadModel(m.name, this);
+          });
+          tdAction.appendChild(evictBtn);
+          tr.appendChild(tdAction);
+
+          loadedBody.appendChild(tr);
+        });
       } else {
-        loadedBody.innerHTML = '<tr><td colspan="6" style="color:var(--ink-muted);text-align:center;padding:12px;">No models currently loaded in GPU VRAM. Memory is free.</td></tr>';
+        const trEmpty = document.createElement('tr');
+        const tdEmpty = document.createElement('td');
+        tdEmpty.colSpan = 6;
+        tdEmpty.style.cssText = 'color:var(--ink-muted);text-align:center;padding:12px;';
+        tdEmpty.textContent = 'No models currently loaded in GPU VRAM. Memory is free.';
+        trEmpty.appendChild(tdEmpty);
+        loadedBody.appendChild(trEmpty);
       }
 
       // Modelfile Parameters & System Prompt
@@ -553,23 +618,57 @@
     // Show 4 recent rows by default, or all if expanded
     const visibleRows = isHistoryExpanded ? reversed : reversed.slice(0, 4);
 
-    body.innerHTML = visibleRows.map(row => {
+    body.innerHTML = '';
+    visibleRows.forEach(row => {
       const isActual = row.token_source === 'actual';
-      const tokenBadge = isActual
-        ? '<span title="Actual provider-reported tokens" style="display:inline-block;margin-left:4px;font-size:10px;padding:1px 5px;border-radius:4px;background:rgba(16,185,129,0.12);color:#10b981;font-weight:600;">exact</span>'
-        : '<span title="Estimated from character length" style="display:inline-block;margin-left:4px;font-size:10px;padding:1px 5px;border-radius:4px;background:rgba(245,158,11,0.12);color:#f59e0b;font-weight:500;">est</span>';
-      return `
-      <tr>
-        <td style="color:var(--ink-muted);font-family:ui-monospace,monospace;font-size:11.5px;">${row.time}</td>
-        <td><strong>${row.model || 'unknown'}</strong></td>
-        <td><span class="tag-neu">${row.path || '/v1'}</span></td>
-        <td>${fmt(row.prompt_tokens)}</td>
-        <td>${fmt(row.output_tokens)} ${tokenBadge}</td>
-        <td>${row.latency_s}s</td>
-        <td><strong style="color:var(--ink);">${row.tps ? row.tps + ' tps' : '—'}</strong></td>
-      </tr>
-      `;
-    }).join('');
+      const tr = document.createElement('tr');
+
+      const tdTime = document.createElement('td');
+      tdTime.style.cssText = 'color:var(--ink-muted);font-family:ui-monospace,monospace;font-size:11.5px;';
+      tdTime.textContent = row.time || '';
+      tr.appendChild(tdTime);
+
+      const tdModel = document.createElement('td');
+      const strongModel = document.createElement('strong');
+      strongModel.textContent = row.model || 'unknown';
+      tdModel.appendChild(strongModel);
+      tr.appendChild(tdModel);
+
+      const tdPath = document.createElement('td');
+      const tagPath = document.createElement('span');
+      tagPath.className = 'tag-neu';
+      tagPath.textContent = row.path || row.endpoint || '/v1';
+      tdPath.appendChild(tagPath);
+      tr.appendChild(tdPath);
+
+      const tdPrompt = document.createElement('td');
+      tdPrompt.textContent = fmt(row.prompt_tokens);
+      tr.appendChild(tdPrompt);
+
+      const tdOutput = document.createElement('td');
+      tdOutput.textContent = fmt(row.output_tokens) + ' ';
+      const badge = document.createElement('span');
+      badge.style.cssText = isActual
+        ? 'display:inline-block;margin-left:4px;font-size:10px;padding:1px 5px;border-radius:4px;background:rgba(16,185,129,0.12);color:#10b981;font-weight:600;'
+        : 'display:inline-block;margin-left:4px;font-size:10px;padding:1px 5px;border-radius:4px;background:rgba(245,158,11,0.12);color:#f59e0b;font-weight:500;';
+      badge.title = isActual ? 'Actual provider-reported tokens' : 'Estimated from character length';
+      badge.textContent = isActual ? 'exact' : 'est';
+      tdOutput.appendChild(badge);
+      tr.appendChild(tdOutput);
+
+      const tdLatency = document.createElement('td');
+      tdLatency.textContent = (row.latency_s != null ? row.latency_s : 0) + 's';
+      tr.appendChild(tdLatency);
+
+      const tdTps = document.createElement('td');
+      const strongTps = document.createElement('strong');
+      strongTps.style.color = 'var(--ink)';
+      strongTps.textContent = row.tps ? row.tps + ' tps' : '—';
+      tdTps.appendChild(strongTps);
+      tr.appendChild(tdTps);
+
+      body.appendChild(tr);
+    });
 
     if (reversed.length > 4) {
       if (viewMoreWrap) viewMoreWrap.style.display = 'block';
@@ -1090,7 +1189,7 @@
       };
       if (activeImage) reqBody.images = [activeImage];
 
-      const res = await fetch('/api/dashboard-chat', {
+      const res = await apiFetch('/api/dashboard-chat', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify(reqBody)

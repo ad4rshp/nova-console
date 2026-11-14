@@ -13,10 +13,42 @@ else:
     BASE_DIR = Path(__file__).resolve().parent.parent
     STATIC_DIR = BASE_DIR
 
-DB_PATH = BASE_DIR / "nova-dashboard.db"
-MODELFILE_PATH = BASE_DIR / "app" / "Modelfile"
-if not MODELFILE_PATH.exists() and (BASE_DIR / "Modelfile").exists():
-    MODELFILE_PATH = BASE_DIR / "Modelfile"
+db_env = os.environ.get("NOVA_DB_PATH")
+if db_env:
+    DB_PATH = Path(db_env)
+elif getattr(sys, "frozen", False):
+    if sys.platform == "win32":
+        local_appdata = os.environ.get("LOCALAPPDATA", str(Path.home() / "AppData" / "Local"))
+        data_dir = Path(local_appdata) / "NovaConsole" / "data"
+    else:
+        data_dir = Path.home() / ".local" / "share" / "nova-console"
+    data_dir.mkdir(parents=True, exist_ok=True)
+    DB_PATH = data_dir / "nova-dashboard.db"
+else:
+    DB_PATH = BASE_DIR / "nova-dashboard.db"
+mf_env = os.environ.get("NOVA_MODELFILE_PATH")
+if mf_env:
+    MODELFILE_PATH = Path(mf_env)
+elif getattr(sys, "frozen", False):
+    if sys.platform == "win32":
+        local_appdata = os.environ.get("LOCALAPPDATA", str(Path.home() / "AppData" / "Local"))
+        config_dir = Path(local_appdata) / "NovaConsole" / "config"
+    else:
+        config_dir = Path.home() / ".config" / "nova-console"
+    config_dir.mkdir(parents=True, exist_ok=True)
+    MODELFILE_PATH = config_dir / "Modelfile"
+    if not MODELFILE_PATH.exists():
+        bundled_mf = (BUNDLE_DIR if hasattr(sys, "_MEIPASS") else BASE_DIR) / "app" / "Modelfile"
+        if bundled_mf.exists():
+            try:
+                import shutil
+                shutil.copy2(bundled_mf, MODELFILE_PATH)
+            except Exception:
+                pass
+else:
+    MODELFILE_PATH = BASE_DIR / "app" / "Modelfile"
+    if not MODELFILE_PATH.exists() and (BASE_DIR / "Modelfile").exists():
+        MODELFILE_PATH = BASE_DIR / "Modelfile"
 TEMPLATES_DIR = (BUNDLE_DIR if getattr(sys, "frozen", False) and hasattr(sys, "_MEIPASS") else BASE_DIR) / "app" / "templates"
 
 # Network & Host Binding Validation
@@ -81,12 +113,25 @@ try:
 except (ValueError, TypeError):
     PORT = 8080
 
+def redact_url_credentials(url_str: str) -> str:
+    """Redacts credentials and passwords from URL strings for safe logging and diagnostics."""
+    try:
+        p = urlparse(url_str)
+        if p.password:
+            return url_str.replace(f":{p.password}@", ":[REDACTED]@")
+        return url_str
+    except Exception:
+        return url_str
+
 # Universal Inference Engine (Ollama: 11434, LM Studio: 1234, vLLM: 8000, LocalAI: 8080, custom OpenAI endpoint)
 def validate_backend_url(raw_url: str) -> str:
     """
-    Validates the LLM backend URL to prevent SSRF vulnerabilities.
-    Enforces http/https schemes and blocks dangerous targets such as cloud metadata endpoints.
+    Validates the LLM backend URL to prevent SSRF and credential leakage vulnerabilities.
+    Enforces http/https schemes, prohibits embedded credentials, and blocks dangerous targets
+    such as cloud metadata endpoints and link-local addresses across both raw IPs and resolved DNS hostnames.
     """
+    import socket
+
     cleaned = raw_url.strip().rstrip("/") if raw_url else ""
     if not cleaned:
         return "http://127.0.0.1:11434"
@@ -97,6 +142,9 @@ def validate_backend_url(raw_url: str) -> str:
         raise ValueError(
             f"Security Violation: Backend URL scheme must be http or https, received '{scheme}'."
         )
+
+    if parsed.username or parsed.password:
+        raise ValueError("Security Violation: Embedded credentials in backend URL are prohibited. Use NOVA_BACKEND_API_KEY instead.")
 
     hostname = (parsed.hostname or "").lower().strip("[]")
     if not hostname:
@@ -112,20 +160,30 @@ def validate_backend_url(raw_url: str) -> str:
     if hostname in blocked_hostnames:
         raise ValueError(f"Security Violation: Access to cloud metadata service ({hostname}) is strictly prohibited.")
 
-    # IP address validation for SSRF targets
+    # DNS resolution and IP address validation for SSRF targets
     try:
         ip = ipaddress.ip_address(hostname)
-        if ip.is_link_local:
-            raise ValueError(f"Security Violation: Link-local backend address '{hostname}' is not permitted.")
-        if ip.is_multicast:
-            raise ValueError(f"Security Violation: Multicast backend address '{hostname}' is not permitted.")
-        if ip.is_reserved:
-            raise ValueError(f"Security Violation: Reserved backend address '{hostname}' is not permitted.")
+        resolved_ips = [ip]
+    except ValueError:
+        resolved_ips = []
+        try:
+            addr_info = socket.getaddrinfo(hostname, None, proto=socket.IPPROTO_TCP)
+            for item in addr_info:
+                resolved_ips.append(ipaddress.ip_address(item[4][0]))
+        except Exception:
+            pass
+
+    for ip in resolved_ips:
         if str(ip) == "169.254.169.254" or ip in ipaddress.ip_network("169.254.0.0/16"):
-            raise ValueError("Security Violation: Cloud metadata IP (169.254.0.0/16) is strictly prohibited.")
-    except ValueError as e:
-        if "Security Violation" in str(e):
-            raise
+            raise ValueError(f"Security Violation: Cloud metadata IP (169.254.0.0/16) on '{hostname}' is strictly prohibited.")
+        if ip.is_link_local:
+            raise ValueError(f"Security Violation: Link-local backend address '{hostname}' ({ip}) is not permitted.")
+        if ip.is_multicast:
+            raise ValueError(f"Security Violation: Multicast backend address '{hostname}' ({ip}) is not permitted.")
+        if ip.is_reserved and not ip.is_loopback:
+            raise ValueError(f"Security Violation: Reserved backend address '{hostname}' ({ip}) is not permitted.")
+
+    return cleaned
         # Not a raw IP address; standard hostname allowed
 
     return cleaned

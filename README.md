@@ -8,7 +8,7 @@ Local hardware monitor, web UI, and OpenAI-compatible proxy for local LLM backen
 
 ### Windows
 ```powershell
-irm https://raw.githubusercontent.com/ad4rshp/nova-console/main/setup_windows.bat -OutFile setup.bat; .\setup.bat
+Invoke-WebRequest -Uri https://raw.githubusercontent.com/ad4rshp/nova-console/main/setup_windows.bat -OutFile setup.bat; .\setup.bat
 ```
 
 ### macOS & Linux

@@ -234,6 +234,11 @@ def test_lan_mode_sensitive_routes_require_authentication(client, monkeypatch):
     monkeypatch.setattr("app.main.NOVA_ALLOW_LAN", True)
 
     sensitive_endpoints = [
+        ("GET", "/api/dashboard", None),
+        ("GET", "/api/history", None),
+        ("GET", "/api/usage-summary", None),
+        ("GET", "/api/settings", None),
+        ("POST", "/api/dashboard-chat", {"model": "nova:latest", "messages": [{"role": "user", "content": "hello"}]}),
         ("POST", "/api/terminal/propose", {"command": "echo test"}),
         ("POST", "/api/settings", {"theme": "dark"}),
         ("POST", "/api/clear-chat-history", {}),
@@ -242,12 +247,13 @@ def test_lan_mode_sensitive_routes_require_authentication(client, monkeypatch):
 
     for method, path, payload in sensitive_endpoints:
         # Without auth: must return 401 Unauthorized
-        res_no_auth = client.request(method, path, json=payload)
+        req_kwargs = {"json": payload} if payload is not None else {}
+        res_no_auth = client.request(method, path, **req_kwargs)
         assert res_no_auth.status_code == 401, f"Expected 401 for {path} without auth in LAN mode, got {res_no_auth.status_code}"
         assert "Authentication required" in res_no_auth.json().get("error", "")
 
         # With valid X-Nova-Auth header: should NOT return 401
-        res_with_auth = client.request(method, path, json=payload, headers={"X-Nova-Auth": admin_token})
+        res_with_auth = client.request(method, path, **req_kwargs, headers={"X-Nova-Auth": admin_token})
         assert res_with_auth.status_code != 401, f"Expected non-401 for {path} with valid auth header"
 
 def test_terminal_lan_auto_disable(monkeypatch):
@@ -292,8 +298,8 @@ def test_terminal_command_allowlist(monkeypatch):
     assert res_blocked["return_code"] == 403
     assert "not in the approved command allowlist" in res_blocked["error"]
 
-def test_backend_url_ssrf_protection():
-    """Ensure SSRF attacks, cloud metadata endpoints, and non-http schemes are blocked."""
+def test_backend_url_ssrf_protection(monkeypatch):
+    """Ensure SSRF attacks, cloud metadata endpoints, embedded credentials, and DNS rebinding are blocked."""
     from app.config import validate_backend_url
 
     # Prohibited schemes
@@ -314,7 +320,19 @@ def test_backend_url_ssrf_protection():
         validate_backend_url("http://metadata.google.internal")
     assert "strictly prohibited" in str(exc.value)
 
+    # Embedded credentials in URL
+    with pytest.raises(ValueError) as exc:
+        validate_backend_url("http://admin:secret123@127.0.0.1:11434")
+    assert "Embedded credentials" in str(exc.value)
+
+    # DNS rebinding to metadata service
+    monkeypatch.setattr("socket.getaddrinfo", lambda *args, **kwargs: [(None, None, None, None, ("169.254.169.254", 80))])
+    with pytest.raises(ValueError) as exc:
+        validate_backend_url("http://attacker-rebinding.com:11434")
+    assert "metadata" in str(exc.value).lower()
+
     # Valid backends succeed
+    monkeypatch.undo()
     assert validate_backend_url("http://127.0.0.1:11434") == "http://127.0.0.1:11434"
     assert validate_backend_url("http://localhost:1234") == "http://localhost:1234"
     assert validate_backend_url("https://api.openai.com/v1") == "https://api.openai.com/v1"
@@ -541,6 +559,26 @@ def test_rate_limiter_bounded_storage_and_categories():
 
     # Storage should be bounded to around max_tracked_keys
     assert len(limiter._requests) <= 55
+
+def test_csp_header_present(client):
+    """Ensure Content-Security-Policy header is present on HTTP responses."""
+    res = client.get("/")
+    assert res.status_code == 200
+    assert "Content-Security-Policy" in res.headers
+    assert "default-src 'self'" in res.headers["Content-Security-Policy"]
+
+def test_frontend_xss_payload_handling_in_history(client):
+    """Ensure malicious model names or paths in request history are recorded as text without injection."""
+    from app.database import db_record_request
+
+    xss_payload = "<script>alert('xss')</script>"
+    db_record_request("/v1/chat/completions", xss_payload, 10, 20, 0.5, 40.0)
+
+    res = client.get("/api/history")
+    assert res.status_code == 200
+    data = res.json()
+    assert any(r["model"] == xss_payload for r in data)
+
 
 
 

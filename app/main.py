@@ -84,15 +84,25 @@ def is_valid_csrf_origin(origin_str: str) -> bool:
     except Exception:
         return False
 
-SENSITIVE_API_PREFIXES = (
+PUBLIC_ROUTES = {
+    "/",
+    "/favicon.ico",
+    "/api/health",
+}
+
+ADMIN_API_PREFIXES = (
     "/api/terminal/",
     "/api/modelfile",
     "/api/rebuild-nova",
     "/api/settings",
-    "/api/chat-history",
     "/api/clear-chat-history",
     "/api/unload",
 )
+
+def is_public_path(path: str) -> bool:
+    if path in PUBLIC_ROUTES or path.startswith("/static/"):
+        return True
+    return False
 
 class SecurityHeadersMiddleware(BaseHTTPMiddleware):
     async def dispatch(self, request: Request, call_next):
@@ -101,8 +111,8 @@ class SecurityHeadersMiddleware(BaseHTTPMiddleware):
         request.state.request_id = request_id
 
         # 1. Request Body Size Limits (10MB global, 1MB for sensitive admin endpoints)
-        is_sensitive = any(request.url.path.startswith(prefix) for prefix in SENSITIVE_API_PREFIXES)
-        max_bytes = 1 * 1024 * 1024 if is_sensitive else 10 * 1024 * 1024
+        is_admin_endpoint = any(request.url.path.startswith(prefix) for prefix in ADMIN_API_PREFIXES)
+        max_bytes = 1 * 1024 * 1024 if is_admin_endpoint else 10 * 1024 * 1024
 
         content_length = request.headers.get("content-length")
         if content_length:
@@ -116,33 +126,23 @@ class SecurityHeadersMiddleware(BaseHTTPMiddleware):
             except ValueError:
                 return JSONResponse(status_code=400, content={"error": "Invalid Content-Length header."})
 
-        # Enforce streaming byte limits when consuming body (guards against chunked/unbounded transfer)
+        # Enforce body size limits
         if request.method in ("POST", "PUT", "PATCH"):
-            body_chunks = []
-            bytes_read = 0
-            async for chunk in request.stream():
-                bytes_read += len(chunk)
-                if bytes_read > max_bytes:
-                    limit_mb = max_bytes // (1024 * 1024)
-                    return JSONResponse(
-                        status_code=413,
-                        content={"error": f"Payload Too Large: request body exceeds maximum allowed limit of {limit_mb}MB."}
-                    )
-                body_chunks.append(chunk)
+            body = await request.body()
+            if len(body) > max_bytes:
+                limit_mb = max_bytes // (1024 * 1024)
+                return JSONResponse(
+                    status_code=413,
+                    content={"error": f"Payload Too Large: request body exceeds maximum allowed limit of {limit_mb}MB."}
+                )
 
-            full_body = b"".join(body_chunks)
-            request._body = full_body
-            async def receive():
-                return {"type": "http.request", "body": full_body, "more_body": False}
-            request._receive = receive
-
-        # 2. Authentication enforcement on sensitive routes when LAN mode is active or auth explicitly required
+        # 2. Authentication enforcement: Protect all private routes when LAN mode is active or auth explicitly required
         require_auth = NOVA_ALLOW_LAN or os.environ.get("NOVA_REQUIRE_AUTH", "0") in ("1", "true", "yes")
-        if is_sensitive and require_auth:
+        if require_auth and not is_public_path(request.url.path):
             if not is_request_authenticated(request):
                 return JSONResponse(
                     status_code=401,
-                    content={"error": "Authentication required: LAN mode is active or sensitive administrative route accessed. Provide a valid Authorization Bearer or X-Nova-Auth token."}
+                    content={"error": "Unauthorized: Authentication required: LAN mode is active or private workstation route accessed. Provide a valid Authorization Bearer or X-Nova-Auth token."}
                 )
 
         # 3. Origin & CSRF Protection on state-changing API endpoints
@@ -171,6 +171,7 @@ class SecurityHeadersMiddleware(BaseHTTPMiddleware):
         response.headers["X-Frame-Options"] = "SAMEORIGIN"
         response.headers["Referrer-Policy"] = "strict-origin-when-cross-origin"
         response.headers["Permissions-Policy"] = "camera=(), microphone=(self), geolocation=()"
+        response.headers["Content-Security-Policy"] = "default-src 'self'; script-src 'self' 'unsafe-inline'; style-src 'self' 'unsafe-inline'; img-src 'self' data:; connect-src 'self' http: ws:; font-src 'self';"
         return response
 
 @asynccontextmanager

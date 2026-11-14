@@ -150,6 +150,7 @@ def test_database_migrations_idempotency(tmp_path, monkeypatch):
     conn.close()
 
     # 2. Point app database path to the legacy database file and run init_db
+    monkeypatch.setenv("NOVA_DB_PATH", str(legacy_db_file))
     monkeypatch.setattr("app.database.DB_PATH", legacy_db_file)
     init_db()
 
@@ -250,5 +251,20 @@ def test_database_cleanup_retention():
     with get_db() as conn:
         count = conn.execute("SELECT COUNT(*) FROM request_history;").fetchone()[0]
         assert count <= 5
+
+def test_database_test_isolation_guarantee():
+    """Ensure tests run against an isolated temporary database, never modifying the production DB."""
+    import os
+
+    from app.config import BASE_DIR
+    from app.database import get_current_db_path
+
+    current_db = get_current_db_path()
+    real_repo_db = BASE_DIR / "nova-dashboard.db"
+
+    # Must NOT point to the real repository database
+    assert str(current_db.resolve()) != str(real_repo_db.resolve())
+    assert "nova-test-suite" in str(current_db) or "tmp" in str(current_db).lower() or "temp" in str(current_db).lower()
+    assert os.environ.get("NOVA_TEST_MODE") == "1"
 
 
