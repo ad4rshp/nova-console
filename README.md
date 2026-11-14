@@ -4,10 +4,6 @@ Local hardware monitor, web UI, and OpenAI-compatible proxy for local LLM backen
 
 ![Nova Console Dashboard](docs/screenshots/dashboard_overview.png)
 
-## Demo
-
-https://github.com/user-attachments/assets/demo.mp4
-
 ## Installation
 
 ### Windows
