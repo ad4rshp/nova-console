@@ -1898,16 +1898,88 @@
     });
   }
 
+  // Manual Update Check
+  async function triggerManualUpdateCheck() {
+    const btn = document.querySelector('#checkUpdateBtn');
+    const icon = document.querySelector('#checkUpdateIcon');
+    if (btn) btn.disabled = true;
+    if (icon) icon.classList.add('icon-spin');
+
+    showToast({
+      title: 'Checking for Updates',
+      message: 'Checking for updates on GitHub…',
+      type: 'info',
+      duration: 2500
+    });
+
+    try {
+      const res = await apiFetch('/api/check-update?force=true');
+      const data = await res.json();
+
+      const updatePill = document.querySelector('#updatePill');
+      const updatePillText = document.querySelector('#updatePillText');
+
+      if (data && data.has_update) {
+        if (updatePill) {
+          updatePill.style.display = 'inline-flex';
+          updatePill.href = data.release_url || 'https://github.com/ad4rshp/nova-console/releases';
+          if (updatePillText) {
+            updatePillText.textContent = `New: v${data.latest_version}`;
+          }
+        }
+        showToast({
+          title: 'Update Available!',
+          message: `Nova Console v${data.latest_version} is available. Click notification badge to view.`,
+          type: 'success',
+          duration: 6000
+        });
+      } else if (data && data.offline) {
+        showToast({
+          title: 'Offline Mode',
+          message: 'Unable to reach GitHub. Please check network connection.',
+          type: 'warning',
+          duration: 3500
+        });
+      } else {
+        showToast({
+          title: 'Up to Date',
+          message: `You are running the latest version (v${data?.current_version || '2.1.0'}).`,
+          type: 'success',
+          duration: 3000
+        });
+      }
+    } catch (err) {
+      showToast({
+        title: 'Check Failed',
+        message: err.message || 'Could not contact update server.',
+        type: 'danger',
+        duration: 3500
+      });
+    } finally {
+      if (btn) btn.disabled = false;
+      if (icon) icon.classList.remove('icon-spin');
+    }
+  }
+  window.triggerManualUpdateCheck = triggerManualUpdateCheck;
+
+  const checkUpdateBtn = document.querySelector('#checkUpdateBtn');
+  if (checkUpdateBtn) {
+    checkUpdateBtn.addEventListener('click', triggerManualUpdateCheck);
+  }
+
   const themeToggleBtn = document.querySelector('#themeToggleBtn');
   if (themeToggleBtn) {
     themeToggleBtn.addEventListener('click', toggleTheme);
     updateThemeUI(document.documentElement.getAttribute('data-theme') || 'light');
   }
 
-  document.querySelector('#refreshBtn').addEventListener('click', () => {
-    loadDashboard(true);
-    showToast({ title: 'Refreshed', message: 'Metrics updated.', type: 'info', duration: 2500 });
-  });
+  const refreshBtn = document.querySelector('#refreshBtn');
+  if (refreshBtn) {
+    refreshBtn.addEventListener('click', () => {
+      loadDashboard(true);
+      showToast({ title: 'Refreshed', message: 'Metrics updated.', type: 'info', duration: 2500 });
+    });
+  }
 
   // Resume polling immediately when user switches back to the tab
   document.addEventListener('visibilitychange', () => {

@@ -25,7 +25,7 @@ async def check_for_updates(force: bool = False) -> dict[str, Any]:
 
     # Respect strict 100% offline localhost privacy by default
     check_enabled = CHECK_UPDATES or os.environ.get("NOVA_CHECK_UPDATES", "0") in ("1", "true", "yes")
-    if not check_enabled:
+    if not check_enabled and not force:
         return {"enabled": False, "current_version": VERSION, "has_update": False}
 
     now = time.time()
