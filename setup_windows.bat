@@ -7,7 +7,7 @@ echo         Nova Console - 1-Click Setup Wizard
 echo ========================================================
 echo.
 
-:: 1. Check Python
+REM 1. Check Python
 where python >nul 2>&1
 if %errorlevel% neq 0 (
     echo [ERROR] Python 3.10 or higher is required.
@@ -31,7 +31,9 @@ if not exist "%SRC_DIR%app" (
     if not exist "%TEMP%\nova-console.zip" (
         powershell -NoProfile -Command "[Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls12; Invoke-WebRequest -UseBasicParsing -Uri 'https://github.com/ad4rshp/nova-console/archive/refs/heads/main.zip' -OutFile '%TEMP%\nova-console.zip'"
     )
+    echo [*] Extracting application files...
     powershell -NoProfile -Command "Expand-Archive -Path '%TEMP%\nova-console.zip' -DestinationPath '%TEMP%\nova-src' -Force"
+    echo [*] Copying application files to installation directory...
     xcopy /E /I /Y /Q "%TEMP%\nova-src\nova-console-main\*" "%INSTALL_DIR%\" >nul
     del "%TEMP%\nova-console.zip" >nul 2>&1
     rd /s /q "%TEMP%\nova-src" >nul 2>&1
@@ -47,9 +49,9 @@ if not exist "%SRC_DIR%app" (
 
 cd /d "%INSTALL_DIR%"
 
-:: 2. Check and setup isolated venv
+REM 2. Check and setup isolated venv
 if exist "%INSTALL_DIR%\.venv\Scripts\python.exe" (
-    echo [*] Virtual environment verified (.venv already exists, skipping re-creation).
+    echo [*] Virtual environment verified - .venv already exists, skipping re-creation.
 ) else (
     echo [*] Creating isolated virtual environment...
     python -m venv "%INSTALL_DIR%\.venv"
@@ -62,13 +64,13 @@ if exist "%INSTALL_DIR%\.venv\Scripts\python.exe" (
     )
 )
 
-:: 3. Create Windows Launcher script in install directory
+REM 3. Create Windows Launcher script in install directory
 echo @echo off > "%INSTALL_DIR%\run.bat"
 echo cd /d "%INSTALL_DIR%" >> "%INSTALL_DIR%\run.bat"
 echo powershell -NoProfile -WindowStyle Hidden -Command "$eng = Get-NetTCPConnection -LocalPort 11434 -State Listen -ErrorAction SilentlyContinue; if (-not $eng -and (Get-Command 'ollama' -ErrorAction SilentlyContinue)) { Start-Process 'ollama' -ArgumentList 'serve' -WindowStyle Hidden }" >> "%INSTALL_DIR%\run.bat"
 echo start "" "%INSTALL_DIR%\.venv\Scripts\python.exe" "%INSTALL_DIR%\launch.py" >> "%INSTALL_DIR%\run.bat"
 
-:: 4. Create Desktop & Start Menu Shortcuts via PowerShell
+REM 4. Create Desktop & Start Menu Shortcuts via PowerShell
 echo [*] Creating Desktop and Start Menu shortcuts...
 powershell -NoProfile -Command "$ws = New-Object -ComObject WScript.Shell; $desk = [Environment]::GetFolderPath('Desktop'); $sc = $ws.CreateShortcut(\"$desk\Nova Console.lnk\"); $sc.TargetPath = 'cmd.exe'; $sc.Arguments = '/c \"\"%INSTALL_DIR%\run.bat\"\"'; $sc.WorkingDirectory = '%INSTALL_DIR%'; $sc.WindowStyle = 7; $sc.Description = 'Nova Console - Local AI Workstation'; $sc.Save()"
 
@@ -82,7 +84,7 @@ echo ========================================================
 echo.
 echo Launching Nova Console now...
 call "%INSTALL_DIR%\run.bat"
-timeout /t 3 >nul
+ping -n 4 127.0.0.1 >nul 2>&1
 exit /b 0
 
 
