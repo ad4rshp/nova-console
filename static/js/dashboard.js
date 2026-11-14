@@ -11,40 +11,34 @@
   const PARAM_KEYS = ['num_ctx', 'num_predict', 'temperature', 'top_k', 'top_p', 'repeat_penalty'];
   const PARAM_METADATA = {
     num_ctx: {
-      label: 'Context Window Size',
+      label: 'Context Size',
       key: 'num_ctx',
-      description: 'Maximum tokens retained in conversation memory context',
-      badge: 'Context Tokens'
+      description: 'Maximum tokens retained in conversation memory context'
     },
     num_predict: {
-      label: 'Max Generation Tokens',
+      label: 'Max Tokens',
       key: 'num_predict',
-      description: 'Upper limit of tokens the model can generate per response',
-      badge: 'Max Output'
+      description: 'Upper limit of tokens generated per response'
     },
     temperature: {
-      label: 'Sampling Temperature',
+      label: 'Temperature',
       key: 'temperature',
-      description: 'Controls randomness: lower is precise and deterministic, higher is creative',
-      badge: 'Creativity'
+      description: 'Controls randomness: lower is deterministic, higher is creative'
     },
     top_k: {
-      label: 'Top-K Focus',
+      label: 'Top-K',
       key: 'top_k',
-      description: 'Limits token sampling pool to the top K most probable words',
-      badge: 'Focus'
+      description: 'Limits sampling pool to the top K most probable tokens'
     },
     top_p: {
-      label: 'Top-P Diversity',
+      label: 'Top-P',
       key: 'top_p',
-      description: 'Nucleus sampling cumulative probability threshold',
-      badge: 'Diversity'
+      description: 'Nucleus sampling cumulative probability threshold'
     },
     repeat_penalty: {
-      label: 'Repetition Penalty',
+      label: 'Repeat Penalty',
       key: 'repeat_penalty',
-      description: 'Penalizes repeated phrases and repetitive response loops',
-      badge: 'Anti-Repetition'
+      description: 'Penalizes repeated phrases and loops'
     }
   };
   const fmt = n => Number(n || 0).toLocaleString();
@@ -218,11 +212,11 @@
       if (badge) badge.textContent = `Live ${engineName} ps`;
 
       if (data.status === 'online') {
-        statusPill.className = 'neu-pill ok';
-        statusText.textContent = `${engineName} Online`;
+        if (statusPill) statusPill.className = 'neu-pill ok';
+        if (statusText) statusText.textContent = `${engineName} Online`;
       } else {
-        statusPill.className = 'neu-pill bad';
-        statusText.textContent = `${engineName} Offline`;
+        if (statusPill) statusPill.className = 'neu-pill bad';
+        if (statusText) statusText.textContent = `${engineName} Offline`;
       }
 
       // Release Updater Notification (Zero background RAM)
@@ -542,18 +536,17 @@
 
     if (container.children.length === 0) {
       container.innerHTML = PARAM_KEYS.map(key => {
-        const meta = PARAM_METADATA[key] || { label: key, key: key, description: '', badge: '' };
+        const meta = PARAM_METADATA[key] || { label: key, key: key, description: '' };
         const [min, max] = currentLimits[key] || [0, 100];
         const step = (key === 'temperature' || key === 'top_p' || key === 'repeat_penalty') ? '0.05' : '1';
         return `
           <div class="param-box">
             <div class="param-header">
-              <span class="param-title" title="${meta.description}">${meta.label}</span>
-              <span class="param-limits" title="Safe parameter limits">${min}–${max}</span>
-            </div>
-            <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:6px;">
-              <span class="tag-neu" style="font-size:10px; font-family:monospace; color:var(--ink-muted);">${meta.key}</span>
-              <span style="font-size:10.5px; color:var(--ink-subtle);">${meta.badge}</span>
+              <div style="display:flex; align-items:center; gap:6px;">
+                <span class="param-title" title="${meta.description}">${meta.label}</span>
+                <span class="tag-neu" style="font-size:9.5px; font-family:monospace; padding:1px 5px; opacity:0.8;">${meta.key}</span>
+              </div>
+              <span class="param-limits" title="Safe range: ${min} to ${max}">${fmt(min)}–${fmt(max)}</span>
             </div>
             <input id="input_${key}" type="number" min="${min}" max="${max}" step="${step}" value="${params[key] || ''}">
           </div>
