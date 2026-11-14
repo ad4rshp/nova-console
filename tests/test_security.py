@@ -6,6 +6,7 @@ from app.config import HOST, NOVA_ALLOW_LAN, WORKSPACE_DIR
 from app.services.terminal import (
     assess_command_risk,
     generate_approval_token,
+    is_safe_workspace_path,
     run_system_command,
     validate_working_dir,
     verify_and_consume_token,
@@ -578,6 +579,102 @@ def test_frontend_xss_payload_handling_in_history(client):
     assert res.status_code == 200
     data = res.json()
     assert any(r["model"] == xss_payload for r in data)
+
+def test_terminal_container_requirement_policy(monkeypatch, client):
+    """Ensure requiring container isolation fails closed with HTTP 503 when Docker is unavailable."""
+    from app.services.auth import get_or_create_admin_token
+    admin_token = get_or_create_admin_token()
+
+    monkeypatch.setenv("NOVA_REQUIRE_CONTAINER", "1")
+    monkeypatch.setattr("app.services.terminal.is_docker_available", lambda: False)
+
+    token_data = generate_approval_token("python --version")
+    res = run_system_command("python --version", approval_token=token_data["approval_token"], user_authorization=admin_token)
+
+    assert res["ok"] is False
+    assert res["return_code"] == 503
+    assert "container isolation is required by policy" in res["error"].lower()
+    assert res["isolation_mode"] == "container_docker_required_failed"
+
+    # Also verify the API endpoint returns 503 Service Unavailable
+    token_data2 = generate_approval_token("python --version")
+    api_res = client.post("/api/terminal/execute", json={
+        "command": "python --version",
+        "approval_token": token_data2["approval_token"],
+        "user_authorization": admin_token,
+        "approved": True
+    })
+    assert api_res.status_code == 503
+    assert api_res.json()["return_code"] == 503
+
+def test_terminal_windows_job_object_setup():
+    """Ensure Windows Job Objects can be created and configured with resource caps on Windows."""
+    import platform
+    import subprocess
+
+    from app.services.terminal import _setup_windows_job_object
+
+    if platform.system() != "Windows":
+        pytest.skip("Windows Job Objects test only applies to Windows systems")
+
+    proc = subprocess.Popen(["cmd.exe", "/c", "echo job_test"], stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+    job = _setup_windows_job_object(int(proc._handle), memory_limit_mb=512, max_processes=16)
+    out, _ = proc.communicate()
+    assert job is not None
+    assert int(job) != 0
+
+    import ctypes
+    ctypes.windll.kernel32.CloseHandle(job)
+    assert b"job_test" in out
+
+def test_terminal_isolation_mode_metadata():
+    """Ensure terminal execution returns transparent isolation_mode and security_notice."""
+    from app.services.auth import get_or_create_admin_token
+    admin_token = get_or_create_admin_token()
+
+    token_data = generate_approval_token("echo isolation_test")
+    res = run_system_command("echo isolation_test", approval_token=token_data["approval_token"], user_authorization=admin_token)
+
+    assert res["ok"] is True
+    assert "isolation_mode" in res
+    assert res["isolation_mode"] == "host_subprocess_restricted"
+    assert "security_notice" in res
+    assert "application OS-user permissions" in res["security_notice"]
+
+def test_terminal_deep_injection_and_traversal(monkeypatch):
+    """Ensure command injection chaining and path traversal attempts are detected and blocked."""
+    from app.services.auth import get_or_create_admin_token
+    admin_token = get_or_create_admin_token()
+
+    # 1. Path traversal detection via is_safe_workspace_path
+    assert is_safe_workspace_path(str(WORKSPACE_DIR)) is True
+    assert is_safe_workspace_path(str(WORKSPACE_DIR / "subfolder")) is True
+    assert is_safe_workspace_path("../../") is False
+    assert is_safe_workspace_path(r"..\..\Windows\System32") is False
+    assert is_safe_workspace_path("/etc/passwd") is False
+
+    # 2. Command injection chaining blocked in strict allowlist mode
+    monkeypatch.setenv("NOVA_STRICT_ALLOWLIST", "1")
+    injection_payloads = [
+        "python --version && calc.exe",
+        "echo safe; rm -rf /",
+        "dir | findstr secret",
+        "echo a & calc.exe",
+        "python -c 'print(1)' > out.txt",
+        "echo test \n whoami",
+    ]
+    for payload in injection_payloads:
+        t_data = generate_approval_token(payload)
+        res = run_system_command(payload, approval_token=t_data["approval_token"], user_authorization=admin_token)
+        assert res["ok"] is False, f"Chaining payload was not blocked: {payload}"
+        assert res["return_code"] == 403
+        assert "forbidden" in res["error"].lower() or "not in the approved command allowlist" in res["error"].lower()
+
+def test_proxy_path_traversal_blocked(client):
+    """Ensure upstream API proxy blocks directory traversal in paths."""
+    res = client.get("/v1/models/..%2fsecret")
+    assert res.status_code == 400
+    assert "Invalid upstream proxy path" in res.json().get("error", "")
 
 
 

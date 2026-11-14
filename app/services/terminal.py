@@ -2,6 +2,7 @@ import os
 import platform
 import re
 import secrets
+import shutil
 import signal
 import subprocess
 import sys
@@ -79,6 +80,204 @@ def get_restricted_path() -> str:
     existing = [d for d in safe_dirs if os.path.isdir(d)]
     return sep.join(existing)
 
+DEFAULT_APPROVED_BINARIES = [
+    "python", "python3", "pip", "pip3", "pytest", "git", "dir", "ls", "echo",
+    "type", "cat", "node", "npm", "whoami", "hostname", "uname", "pwd", "date"
+]
+
+def is_safe_workspace_path(requested_path: str | None) -> bool:
+    """
+    Returns True if requested_path resolves within WORKSPACE_DIR, False if traversal outside occurs.
+    """
+    if not requested_path:
+        return True
+    try:
+        base_workspace = WORKSPACE_DIR.resolve()
+        target = Path(requested_path).resolve()
+        target.relative_to(base_workspace)
+        return True
+    except (ValueError, Exception):
+        return False
+
+def _setup_windows_job_object(proc_handle: int, memory_limit_mb: int = 512, max_processes: int = 16) -> Any:
+    """
+    Assigns the subprocess to a Windows Job Object with kernel-enforced limits:
+    - Maximum process and job memory limits (prevents RAM exhaustion)
+    - Active process count cap (prevents fork bombs)
+    - KILL_ON_JOB_CLOSE (ensures all child/grandchild processes die when handle closes)
+    """
+    if platform.system() != "Windows":
+        return None
+
+    try:
+        import ctypes
+        from ctypes import wintypes
+
+        kernel32 = ctypes.windll.kernel32
+
+        JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE = 0x00002000
+        JOB_OBJECT_LIMIT_PROCESS_MEMORY = 0x00000100
+        JOB_OBJECT_LIMIT_JOB_MEMORY = 0x00000200
+        JOB_OBJECT_LIMIT_ACTIVE_PROCESS = 0x00000008
+
+        class IO_COUNTERS(ctypes.Structure):
+            _fields_ = [
+                ("ReadOperationCount", ctypes.c_uint64),
+                ("WriteOperationCount", ctypes.c_uint64),
+                ("OtherOperationCount", ctypes.c_uint64),
+                ("ReadTransferCount", ctypes.c_uint64),
+                ("WriteTransferCount", ctypes.c_uint64),
+                ("OtherTransferCount", ctypes.c_uint64),
+            ]
+
+        class JOBOBJECT_BASIC_LIMIT_INFORMATION(ctypes.Structure):
+            _fields_ = [
+                ("PerProcessUserTimeLimit", ctypes.c_int64),
+                ("PerJobUserTimeLimit", ctypes.c_int64),
+                ("LimitFlags", wintypes.DWORD),
+                ("MinimumWorkingSetSize", ctypes.c_size_t),
+                ("MaximumWorkingSetSize", ctypes.c_size_t),
+                ("ActiveProcessLimit", wintypes.DWORD),
+                ("Affinity", ctypes.c_size_t),
+                ("PriorityClass", wintypes.DWORD),
+                ("SchedulingClass", wintypes.DWORD),
+            ]
+
+        class JOBOBJECT_EXTENDED_LIMIT_INFORMATION(ctypes.Structure):
+            _fields_ = [
+                ("BasicLimitInformation", JOBOBJECT_BASIC_LIMIT_INFORMATION),
+                ("IoCounters", IO_COUNTERS),
+                ("ProcessMemoryLimit", ctypes.c_size_t),
+                ("JobMemoryLimit", ctypes.c_size_t),
+                ("PeakProcessMemoryUsed", ctypes.c_size_t),
+                ("PeakJobMemoryUsed", ctypes.c_size_t),
+            ]
+
+        job = kernel32.CreateJobObjectW(None, None)
+        if not job:
+            return None
+
+        info = JOBOBJECT_EXTENDED_LIMIT_INFORMATION()
+        info.BasicLimitInformation.LimitFlags = (
+            JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE
+            | JOB_OBJECT_LIMIT_PROCESS_MEMORY
+            | JOB_OBJECT_LIMIT_JOB_MEMORY
+            | JOB_OBJECT_LIMIT_ACTIVE_PROCESS
+        )
+        mem_bytes = memory_limit_mb * 1024 * 1024
+        info.ProcessMemoryLimit = mem_bytes
+        info.JobMemoryLimit = mem_bytes
+        info.BasicLimitInformation.ActiveProcessLimit = max_processes
+
+        res = kernel32.SetInformationJobObject(job, 9, ctypes.byref(info), ctypes.sizeof(info))
+        if res:
+            kernel32.AssignProcessToJobObject(job, proc_handle)
+        return job
+    except Exception:
+        return None
+
+def is_docker_available() -> bool:
+    """
+    Detects whether the Docker binary is present and the Docker daemon is actively responding.
+    """
+    docker_bin = shutil.which("docker")
+    if not docker_bin:
+        return False
+    try:
+        res = subprocess.run(
+            [docker_bin, "info"],
+            capture_output=True,
+            timeout=3
+        )
+        return res.returncode == 0
+    except Exception:
+        return False
+
+def execute_in_docker(
+    command: str,
+    target_dir: Path,
+    image: str = "python:3.11-slim",
+    timeout: float = 15.0
+) -> dict[str, Any]:
+    """
+    Executes a command inside an isolated Docker container with:
+    - Network disabled (--network none)
+    - Memory capped at 512MB (--memory 512m)
+    - CPU limited to 1.0 cores (--cpus 1.0)
+    - Read-only root filesystem (--read-only)
+    - Bound workspace directory (--volume <target_dir>:/workspace:rw)
+    """
+    docker_bin = shutil.which("docker") or "docker"
+    volume_mount = f"{str(target_dir.resolve())}:/workspace:rw"
+
+    docker_cmd = [
+        docker_bin,
+        "run",
+        "--rm",
+        "--network", "none",
+        "--memory", "512m",
+        "--cpus", "1.0",
+        "--read-only",
+        "--tmpfs", "/tmp:rw,noexec,nosuid,size=64m",  # nosec: B108
+        "-v", volume_mount,
+        "-w", "/workspace",
+        image,
+        "sh", "-c", command
+    ]
+
+    start_time = time.perf_counter()
+    try:
+        proc = subprocess.run(
+            docker_cmd,
+            capture_output=True,
+            text=True,
+            timeout=timeout
+        )
+        duration = time.perf_counter() - start_time
+        combined_output = ((proc.stdout or "") + ("\n--- STDERR ---\n" + (proc.stderr or "") if proc.stderr else "")).strip()
+        if len(combined_output) > 65536:
+            combined_output = combined_output[:65536] + "\n... [Output truncated at 64KB]"
+        safe_output = scrub_sensitive_output(combined_output)
+
+        return {
+            "ok": proc.returncode == 0,
+            "return_code": proc.returncode,
+            "output": safe_output or "(Command completed with no output)",
+            "execution_time_s": round(duration, 2),
+            "working_dir": str(target_dir),
+            "risk_level": "LOW",
+            "isolation_mode": "container_docker",
+            "security_notice": "Command executed inside isolated Docker container with network disabled, read-only root, memory/CPU caps, and workspace volume mount."
+        }
+    except subprocess.TimeoutExpired:
+        duration = time.perf_counter() - start_time
+        error_msg = f"Docker container execution timed out after {timeout} seconds."
+        return {
+            "ok": False,
+            "error": error_msg,
+            "return_code": -1,
+            "output": error_msg,
+            "execution_time_s": round(duration, 2),
+            "working_dir": str(target_dir),
+            "risk_level": "HIGH",
+            "isolation_mode": "container_docker",
+            "security_notice": "Command executed inside isolated Docker container with network disabled, read-only root, memory/CPU caps, and workspace volume mount."
+        }
+    except Exception as exc:
+        duration = time.perf_counter() - start_time
+        error_msg = f"Docker container execution failed: {str(exc)}"
+        return {
+            "ok": False,
+            "error": error_msg,
+            "return_code": -1,
+            "output": error_msg,
+            "execution_time_s": round(duration, 2),
+            "working_dir": str(target_dir),
+            "risk_level": "HIGH",
+            "isolation_mode": "container_docker",
+            "security_notice": "Command executed inside isolated Docker container with network disabled, read-only root, memory/CPU caps, and workspace volume mount."
+        }
+
 def _setup_posix_sandbox():
     """Sets process group and configures OS resource limits on Linux/macOS."""
     os.setsid()
@@ -112,10 +311,15 @@ def validate_command_chaining(command: str) -> tuple[bool, str]:
     Detects shell chaining operators (;, &&, ||, |, &, `, $()) that can be used
     for command injection or unauthorized lateral execution.
     """
-    if is_strict_sandbox():
-        pattern = r"(;|&&|\|\||\|(?![&|])|(?<!&)&(?!&)|`|\$\()"
+    strict_sandbox = is_strict_sandbox()
+    strict_allowlist = (
+        os.environ.get("NOVA_STRICT_ALLOWLIST", "0").lower() in ("1", "true", "yes")
+        or bool(os.environ.get("NOVA_COMMAND_ALLOWLIST", "").strip())
+    )
+    if strict_sandbox or strict_allowlist:
+        pattern = r"(;|&&|\|\||\|(?![&|])|(?<!&)&(?!&)|`|\$\(|\r|\n|>|<)"
         if re.search(pattern, command):
-            return False, "Command chaining and subshell operators (;, &&, ||, |, &, `, $()) are strictly forbidden when NOVA_TERMINAL_SANDBOX=strict."
+            return False, "Command chaining and redirection operators (;, &&, ||, |, &, `, $(), >, <) are strictly forbidden in strict security mode."
     return True, ""
 
 def validate_working_dir(requested_path: str | None) -> Path:
@@ -342,9 +546,18 @@ def run_system_command(
     allowlist_env = os.environ.get("NOVA_COMMAND_ALLOWLIST", "").strip()
     strict_allowlist = os.environ.get("NOVA_STRICT_ALLOWLIST", "0").lower() in ("1", "true", "yes") or bool(allowlist_env)
     if strict_allowlist:
-        allowed_bins = [b.strip().lower() for b in allowlist_env.split(",") if b.strip()] if allowlist_env else [
-            "python", "python3", "pip", "pip3", "pytest", "git", "dir", "ls", "echo", "type", "cat", "node", "npm", "whoami", "hostname"
-        ]
+        chaining_pattern = r"(;|&&|\|\||\|(?![&|])|(?<!&)&(?!&)|`|\$\(|\r|\n|>|<)"
+        if re.search(chaining_pattern, cmd_clean):
+            return {
+                "ok": False,
+                "error": "Execution blocked: Command chaining and redirection operators (;, &&, ||, |, &, `, $(), >, <) are strictly forbidden when strict allowlist is active.",
+                "return_code": 403,
+                "output": "",
+                "working_dir": str(target_dir),
+                "isolation_mode": "host_subprocess_restricted",
+            }
+
+        allowed_bins = [b.strip().lower() for b in allowlist_env.split(",") if b.strip()] if allowlist_env else DEFAULT_APPROVED_BINARIES
         import shlex
         try:
             tokens = shlex.split(cmd_clean, posix=(platform.system() != "Windows"))
@@ -360,7 +573,8 @@ def run_system_command(
                 "error": f"Execution blocked: Command '{base_cmd}' is not in the approved command allowlist.",
                 "return_code": 403,
                 "output": "",
-                "working_dir": str(target_dir)
+                "working_dir": str(target_dir),
+                "isolation_mode": "host_subprocess_restricted",
             }
 
     # 1. Enforce Server-Side User Authorization
@@ -423,6 +637,46 @@ def run_system_command(
     start_time = time.perf_counter()
     is_windows = platform.system() == "Windows"
 
+    HOST_SECURITY_NOTICE = (
+        "Command executed via host subprocess with restricted privileges and workspace bounds. "
+        "Note: Host execution operates with the application OS-user permissions; it does not provide "
+        "full OS container isolation. Use NOVA_REQUIRE_CONTAINER=1 for containerized isolation."
+    )
+
+    # 5. OS Container Isolation Backend & Policy Enforcement
+    require_container = os.environ.get("NOVA_REQUIRE_CONTAINER", "0").lower() in ("1", "true", "yes")
+    backend = os.environ.get("NOVA_TERMINAL_BACKEND", "auto").lower()
+
+    if require_container or backend == "docker":
+        if not is_docker_available():
+            _TERMINAL_SEMAPHORE.release()
+            error_msg = "OS container isolation is required by policy (NOVA_REQUIRE_CONTAINER=1), but Docker daemon is not available or running on this system."
+            return {
+                "ok": False,
+                "error": error_msg,
+                "return_code": 503,
+                "output": "",
+                "working_dir": str(target_dir),
+                "risk_level": "BLOCKED",
+                "isolation_mode": "container_docker_required_failed",
+                "security_notice": "OS container isolation required by security policy; host execution rejected."
+            }
+        try:
+            docker_image = os.environ.get("NOVA_DOCKER_IMAGE", "python:3.11-slim")
+            res = execute_in_docker(cmd_clean, target_dir, image=docker_image, timeout=COMMAND_TIMEOUT_SECONDS)
+            db_record_command(
+                cmd_clean,
+                str(target_dir),
+                approved=True,
+                return_code=res.get("return_code", -1),
+                output=res.get("output", ""),
+                execution_time=res.get("execution_time_s", 0.0),
+                risk_level=risk_level,
+            )
+            return res
+        finally:
+            _TERMINAL_SEMAPHORE.release()
+
     # Restricted environment: prevent subprocess from inheriting host secrets or API credentials
     safe_env = os.environ.copy()
     secret_terms = ("NOVA", "TOKEN", "SECRET", "KEY", "PASS", "AUTH", "CREDENTIAL", "AWS", "GITHUB", "OPENAI")
@@ -441,6 +695,7 @@ def run_system_command(
     safe_env["PATH"] = get_restricted_path()
 
     proc = None
+    job_handle = None
     try:
         if is_windows:
             proc = subprocess.Popen(
@@ -452,6 +707,8 @@ def run_system_command(
                 env=safe_env,
                 creationflags=creation_flags
             )
+            if hasattr(proc, "_handle") and proc._handle:
+                job_handle = _setup_windows_job_object(int(proc._handle))
         else:
             bash_cmd = ["/bin/bash", "--noprofile", "--norc"]
             if is_strict_sandbox():
@@ -482,7 +739,9 @@ def run_system_command(
                 "output": error_msg,
                 "execution_time_s": round(duration, 2),
                 "working_dir": str(target_dir),
-                "risk_level": risk_level
+                "risk_level": risk_level,
+                "isolation_mode": "host_subprocess_restricted",
+                "security_notice": HOST_SECURITY_NOTICE,
             }
 
         duration = time.perf_counter() - start_time
@@ -509,7 +768,9 @@ def run_system_command(
             "output": safe_output or "(Command completed with no output)",
             "execution_time_s": round(duration, 2),
             "working_dir": str(target_dir),
-            "risk_level": risk_level
+            "risk_level": risk_level,
+            "isolation_mode": "host_subprocess_restricted",
+            "security_notice": HOST_SECURITY_NOTICE,
         }
 
     except Exception as exc:
@@ -523,7 +784,15 @@ def run_system_command(
             "output": error_msg,
             "execution_time_s": round(duration, 2),
             "working_dir": str(target_dir),
-            "risk_level": risk_level
+            "risk_level": risk_level,
+            "isolation_mode": "host_subprocess_restricted",
+            "security_notice": HOST_SECURITY_NOTICE,
         }
     finally:
+        if job_handle and is_windows:
+            try:
+                import ctypes
+                ctypes.windll.kernel32.CloseHandle(job_handle)
+            except Exception:
+                pass
         _TERMINAL_SEMAPHORE.release()

@@ -35,6 +35,6 @@ async def execute_terminal_command(payload: ExecuteCommandPayload, request: Requ
     )
     if not result.get("ok"):
         code = result.get("return_code", 403)
-        status_code = code if code in (401, 403, 429) else 400
+        status_code = code if code in (401, 403, 429, 503) else 400
         return JSONResponse(status_code=status_code, content=result)
     return result

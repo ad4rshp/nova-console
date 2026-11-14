@@ -60,10 +60,17 @@ async def proxy_v1(path: str, request: Request):
                 content={"error": "Unauthorized: API proxy access requires valid Authorization Bearer token when LAN mode is active."},
             )
 
+    # Path traversal defense: block any attempted directory traversal in proxy URL
+    if ".." in path or path.startswith(("/", "\\")):
+        return JSONResponse(
+            status_code=400,
+            content={"error": "Bad Request: Invalid upstream proxy path."}
+        )
+
     target_url = f"{LLM_BACKEND_URL}/v1/{path}"
 
     # 3. Secure Upstream Header Forwarding
-    # Explicitly strip hop-by-hop headers and internal Nova credentials so they never leak to upstream LLMs
+    # Explicitly strip hop-by-hop headers, cookies, and internal Nova credentials so they never leak to upstream LLMs
     backend_api_key = os.environ.get("NOVA_BACKEND_API_KEY") or os.environ.get("BACKEND_API_KEY")
     headers: dict[str, str] = {}
     
@@ -71,7 +78,7 @@ async def proxy_v1(path: str, request: Request):
         k_lower = k.lower()
         if k_lower in HOP_BY_HOP_HEADERS:
             continue
-        if k_lower in ("x-nova-auth", "x-nova-admin"):
+        if k_lower in ("x-nova-auth", "x-nova-admin", "x-nova-key", "cookie", "set-cookie"):
             continue
         if k_lower == "authorization":
             # If the client sent Nova's admin token, strip it so it does not leak upstream

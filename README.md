@@ -75,6 +75,9 @@ Set environment variables or use a `.env` file:
 | `NOVA_ADMIN_KEY` | *(auto-generated)* | Admin key for authenticated routes and terminal execution. |
 | `NOVA_REQUIRE_AUTH` | `0` | Set to `1` to enforce authentication on loopback as well. |
 | `NOVA_DISABLE_TERMINAL` | `0` | Set to `1` to disable terminal command execution. |
+| `NOVA_REQUIRE_CONTAINER` | `0` | Set to `1` to require Docker container isolation for terminal execution (fails closed if Docker is unavailable). |
+| `NOVA_STRICT_ALLOWLIST` | `0` | Set to `1` to restrict terminal commands strictly to approved binaries and block chaining/redirection operators. |
+| `NOVA_COMMAND_ALLOWLIST` | *(default)* | Comma-separated list of approved executable binaries for terminal execution. |
 | `NOVA_BACKEND_URL` | `http://127.0.0.1:11434` | Backend LLM server URL (Ollama, LM Studio, vLLM, LocalAI, llama.cpp). |
 | `NOVA_NO_BROWSER` | `0` | Set to `1` to prevent opening the browser on launch. |
 | `NOVA_CHECK_UPDATES` | `1` | Set to `0` to disable GitHub release check. |
@@ -82,7 +85,7 @@ Set environment variables or use a `.env` file:
 ## Security
 
 - **Loopback Default**: Binds to `127.0.0.1`. Non-loopback addresses fail startup unless `NOVA_ALLOW_LAN=1` is set.
-- **Terminal Execution**: Restricted execution environment with resource limits (POSIX setrlimit / Windows process group), directory confinement, sanitized environment variables, single-use cryptographic approval tokens, and server user authorization. Catastrophic commands are blocked.
+- **Terminal Execution**: Commands executed on the host run with the operating system privileges of the Nova user under layered guardrails (Windows Job Objects kernel limits / POSIX resource limits, strict workspace confinement, sanitized environment, cryptographic single-use approval tokens, and strict command allowlists). For untrusted environments, containerized Docker isolation can be enforced with `NOVA_REQUIRE_CONTAINER=1` (failing closed if Docker is not running).
 - **LAN Protection**: When `NOVA_ALLOW_LAN=1` is enabled, sensitive endpoints (`/api/terminal/*`, `/api/modelfile`, `/api/settings`, `/api/chat-history`, `/v1/*`) require `Authorization: Bearer <token>` or `X-Nova-Auth`. Arbitrary non-loopback origins are strictly rejected.
 - **Credential Stripping**: Nova's administrative credentials are never forwarded upstream to the backend inference server.
 - **Browser Protection**: Strict CSRF origin checking on mutating endpoints and security headers (`nosniff`, `SAMEORIGIN`).
