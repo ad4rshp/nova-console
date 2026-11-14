@@ -7,8 +7,9 @@ from urllib.parse import urlparse
 
 from fastapi import FastAPI, HTTPException, Request, Response
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import HTMLResponse, JSONResponse
+from fastapi.responses import FileResponse, HTMLResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
+from starlette.datastructures import Headers
 from starlette.middleware.base import BaseHTTPMiddleware
 
 from app.config import (
@@ -240,11 +241,22 @@ app.add_middleware(
 app.add_middleware(SecurityHeadersMiddleware)
 
 # Mount Static Assets Directory (/static/css, /static/js)
+class FreshStaticFiles(StaticFiles):
+    def is_not_modified(self, response_headers: Headers, request_headers: Headers) -> bool:
+        # In local AI workstation / dashboard mode, bypass 304 Not Modified cache
+        # so frontend JS and CSS updates are delivered freshly to the browser (200 OK)
+        return False
+
+    def file_response(self, *args, **kwargs) -> Response:
+        resp = super().file_response(*args, **kwargs)
+        resp.headers["Cache-Control"] = "no-cache, must-revalidate"
+        return resp
+
 static_path = STATIC_DIR / "static"
 if not static_path.exists():
     static_path = BASE_DIR / "static"
 if static_path.exists():
-    app.mount("/static", StaticFiles(directory=str(static_path)), name="static")
+    app.mount("/static", FreshStaticFiles(directory=str(static_path)), name="static")
 
 # Mount Modular Routers
 app.include_router(dashboard_router)
@@ -252,6 +264,23 @@ app.include_router(chat_router)
 app.include_router(terminal_router)
 app.include_router(modelfile_router)
 app.include_router(proxy_router)
+
+# --- Favicon Delivery ---
+@app.get("/favicon.ico", include_in_schema=False)
+async def serve_favicon():
+    candidates = [
+        static_path / "favicon.ico",
+        STATIC_DIR / "static" / "favicon.ico",
+        BASE_DIR / "static" / "favicon.ico",
+        static_path / "favicon.svg",
+        STATIC_DIR / "static" / "favicon.svg",
+        BASE_DIR / "static" / "favicon.svg",
+    ]
+    for candidate in candidates:
+        if candidate.exists():
+            media = "image/x-icon" if candidate.suffix == ".ico" else "image/svg+xml"
+            return FileResponse(candidate, media_type=media)
+    return Response(status_code=204)
 
 # --- Frontend HTML Delivery ---
 @app.get("/", response_class=HTMLResponse)
