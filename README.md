@@ -4,6 +4,8 @@ Local hardware monitor, web UI, and OpenAI-compatible proxy for local LLM backen
 
 ![Nova Console Dashboard](docs/screenshots/dashboard_overview.png)
 
+An interactive animated tutorial demonstrating telemetry monitoring, context presets, streaming generation, and command sandboxing is available at [docs/showcase/tutorial.html](docs/showcase/tutorial.html).
+
 ## Installation
 
 ### Windows
