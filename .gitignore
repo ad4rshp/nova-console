@@ -25,6 +25,8 @@ nova-dashboard.db
 .DS_Store
 Thumbs.db
 
+# Showcase folder (local only)
+docs/showcase/
 
 # Legacy subfolder
 ollama-dashboard/
