@@ -1,3 +1,4 @@
+import os
 import time
 from typing import Any
 
@@ -22,7 +23,9 @@ def parse_version(v_str: str) -> tuple[int, ...]:
 async def check_for_updates(force: bool = False) -> dict[str, Any]:
     global _cached_update_result, _last_check_time
 
-    if not CHECK_UPDATES:
+    # Respect strict 100% offline localhost privacy by default
+    check_enabled = CHECK_UPDATES or os.environ.get("NOVA_CHECK_UPDATES", "0") in ("1", "true", "yes")
+    if not check_enabled:
         return {"enabled": False, "current_version": VERSION, "has_update": False}
 
     now = time.time()
@@ -55,14 +58,51 @@ async def check_for_updates(force: bool = False) -> dict[str, Any]:
                 }
                 _last_check_time = now
                 return _cached_update_result
-            elif resp.status_code in (403, 404):
-                # Repo or release not yet published on GitHub, fallback gracefully
+            elif resp.status_code == 404:
+                # /releases/latest returns 404 if no GitHub Release has been drafted yet; query git tags as fallback
+                tags_url = f"https://api.github.com/repos/{GITHUB_REPO}/tags"
+                try:
+                    tags_resp = await client.get(tags_url, headers=headers)
+                    if tags_resp.status_code == 200:
+                        tags_data = tags_resp.json()
+                        if tags_data and isinstance(tags_data, list) and len(tags_data) > 0:
+                            tag = tags_data[0].get("name", "").lstrip("v")
+                            latest_tuple = parse_version(tag)
+                            current_tuple = parse_version(VERSION)
+                            has_update = latest_tuple > current_tuple
+                            _cached_update_result = {
+                                "enabled": True,
+                                "current_version": VERSION,
+                                "latest_version": tag or VERSION,
+                                "has_update": has_update,
+                                "release_name": f"Nova Console v{tag}",
+                                "release_url": f"https://github.com/{GITHUB_REPO}/releases",
+                                "release_notes": "",
+                                "published_at": "",
+                            }
+                            _last_check_time = now
+                            return _cached_update_result
+                except Exception:
+                    pass
+
+                # Repo or release not yet published on GitHub, fallback cleanly without error
                 _cached_update_result = {
                     "enabled": True,
                     "current_version": VERSION,
                     "latest_version": VERSION,
                     "has_update": False,
                     "message": "Up to date."
+                }
+                _last_check_time = now
+                return _cached_update_result
+            elif resp.status_code == 403:
+                # GitHub API rate limited or forbidden
+                _cached_update_result = {
+                    "enabled": True,
+                    "current_version": VERSION,
+                    "latest_version": VERSION,
+                    "has_update": False,
+                    "message": "GitHub API rate limit exceeded."
                 }
                 _last_check_time = now
                 return _cached_update_result
