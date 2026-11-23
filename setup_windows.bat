@@ -44,6 +44,7 @@ if not exist "%SRC_DIR%app" (
     copy /Y "%SRC_DIR%launch.py" "%INSTALL_DIR%\" >nul
     copy /Y "%SRC_DIR%requirements.txt" "%INSTALL_DIR%\" >nul
     if exist "%SRC_DIR%requirements.lock" copy /Y "%SRC_DIR%requirements.lock" "%INSTALL_DIR%\" >nul
+    if exist "%SRC_DIR%uninstall_windows.bat" copy /Y "%SRC_DIR%uninstall_windows.bat" "%INSTALL_DIR%\uninstall.bat" >nul
     copy /Y "%SRC_DIR%.env.example" "%INSTALL_DIR%\.env.example" >nul
 )
 
@@ -80,6 +81,7 @@ echo.
 echo ========================================================
 echo   Installation Completed Successfully!
 echo   Desktop shortcut 'Nova Console' has been created.
+echo   To uninstall at any time: run "%INSTALL_DIR%\uninstall.bat"
 echo ========================================================
 echo.
 echo Launching Nova Console now...

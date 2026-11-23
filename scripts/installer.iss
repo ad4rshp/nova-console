@@ -39,3 +39,14 @@ Name: "{autodesktop}\{#MyAppName}"; Filename: "{app}\{#MyAppExeName}"; Tasks: de
 [Run]
 Filename: "{app}\{#MyAppExeName}"; Description: "{cm:LaunchProgram,{#StringChange(MyAppName, '&', '&&')}}"; Flags: nowait postinstall skipifsilent
 
+[UninstallRun]
+Filename: "taskkill"; Parameters: "/f /im {#MyAppExeName}"; Flags: runhidden; RunOnceId: "KillNovaProcess"
+
+[UninstallDelete]
+Type: filesandordirs; Name: "{localappdata}\NovaConsole"
+Type: filesandordirs; Name: "{app}\data"
+Type: filesandordirs; Name: "{app}\config"
+Type: files; Name: "{app}\*.db*"
+Type: files; Name: "{userdesktop}\Nova Console.lnk"
+Type: files; Name: "{userprograms}\Nova Console.lnk"
+

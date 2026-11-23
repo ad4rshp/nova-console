@@ -34,6 +34,8 @@ else
     cp "$SRC_DIR/launch.py" "$INSTALL_DIR/"
     cp "$SRC_DIR/requirements.txt" "$INSTALL_DIR/"
     cp "$SRC_DIR/requirements.lock" "$INSTALL_DIR/" 2>/dev/null || true
+    cp "$SRC_DIR/uninstall_unix.sh" "$INSTALL_DIR/uninstall.sh" 2>/dev/null || true
+    chmod +x "$INSTALL_DIR/uninstall.sh" 2>/dev/null || true
     cp "$SRC_DIR/.env.example" "$INSTALL_DIR/" 2>/dev/null || true
 fi
 
@@ -84,6 +86,7 @@ echo ""
 echo "========================================================"
 echo "  🎉 Installation Complete!"
 echo "  Run anywhere via: nova-console"
+echo "  To uninstall at any time: $INSTALL_DIR/uninstall.sh"
 echo "========================================================"
 echo ""
 "$BIN_DIR/nova-console"

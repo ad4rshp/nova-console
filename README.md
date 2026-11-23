@@ -24,6 +24,23 @@ pip install -r requirements.txt
 python launch.py
 ```
 
+## Uninstallation
+
+To completely remove Nova Console from your system (including background processes, virtual environments, SQLite databases, shortcuts, and configurations):
+
+### Windows
+Double-click `uninstall_windows.bat` or run:
+```cmd
+uninstall_windows.bat
+```
+*(If installed via 1-click setup, you can also run `%LOCALAPPDATA%\NovaConsole\uninstall.bat`)*
+
+### macOS & Linux
+```bash
+./uninstall_unix.sh
+```
+*(If installed via 1-click setup, you can also run `~/.local/share/nova-console/uninstall.sh`)*
+
 ## Features
 
 - **Hardware Monitoring**: Real-time GPU VRAM, temperature, RAM, and disk metrics.
