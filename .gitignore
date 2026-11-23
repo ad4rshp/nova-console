@@ -30,6 +30,7 @@ Thumbs.db
 
 # Showcase folder (local only)
 docs/showcase/
+script.md
 
 # Legacy subfolder
 ollama-dashboard/
