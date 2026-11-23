@@ -205,6 +205,7 @@ async def proxy_v1(path: str, request: Request):
             exact_prompt_tokens = prompt_tokens_est
             has_exact = False
             sse_buffer = ""
+            accumulated_content_len = 0
             try:
                 async for chunk in response.aiter_bytes():
                     if await request.is_disconnected():
@@ -221,10 +222,11 @@ async def proxy_v1(path: str, request: Request):
                                     exact_prompt_tokens = cdata["usage"].get("prompt_tokens", exact_prompt_tokens)
                                     out_tokens = cdata["usage"].get("completion_tokens", out_tokens)
                                     has_exact = True
-                                elif "choices" in cdata and cdata["choices"]:
+                                elif not has_exact and "choices" in cdata and cdata["choices"]:
                                     delta = cdata["choices"][0].get("delta", {})
                                     if delta.get("content"):
-                                        out_tokens += max(1, len(delta["content"]) // 4)
+                                        accumulated_content_len += len(delta["content"])
+                                        out_tokens = max(1, accumulated_content_len // 4)
                             except Exception:
                                 pass
 

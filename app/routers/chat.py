@@ -186,7 +186,7 @@ async def dashboard_chat(payload: DashboardChatPayload, request: Request):
             db_record_request(
                 endpoint="/api/chat",
                 model=model,
-                prompt_tokens=prompt_tokens or (len(str(messages)) // 4),
+                prompt_tokens=prompt_tokens or (sum(len(m.get("content", "")) for m in messages) // 4),
                 completion_tokens=output_tokens or (len(full_content) // 4),
                 latency_s=round(duration, 2),
                 tps=tps,

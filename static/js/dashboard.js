@@ -171,7 +171,9 @@
   // Generate In-Card SVG Sparkline Paths
   function generateSparkline(values, width = 72, height = 36) {
     if (!values || values.length === 0) {
-      return { line: `M0,${height * 0.7} Q${width/2},${height * 0.3} ${width},${height * 0.6}`, fill: `M0,${height} L0,${height * 0.7} Q${width/2},${height * 0.3} ${width},${height * 0.6} L${width},${height} Z` };
+      // No data: flat line at the bottom instead of a fake curve
+      const y = height - 2;
+      return { line: `M0,${y} L${width},${y}`, fill: `M0,${height} L0,${y} L${width},${y} L${width},${height} Z` };
     }
     const min = Math.min(...values);
     const max = Math.max(...values);
